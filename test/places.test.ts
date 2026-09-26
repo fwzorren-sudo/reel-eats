@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PlacesClient, resolveBranch } from "../src/places";
+import { brandQuery, categoryFor, cuisineFor, guessCategory, isFoodPlace, PlacesClient, resolveBranch, toCandidate } from "../src/places";
+import { businessName } from "../src/pipeline";
 import type { ExtractedPlace, Home } from "../src/types";
 
 const HOME_JC: Home = { address: "Jersey City, NJ", lat: 40.7178, lng: -74.0431 };
@@ -116,5 +117,76 @@ describe("resolveBranch", () => {
       new Response(JSON.stringify({ error: { message: "API key not valid." } }), { status: 400 }),
     );
     await expect(client.textSearch("x")).rejects.toThrow(/API key not valid/);
+  });
+});
+
+describe("food filtering, categories and chains", () => {
+  const client = new PlacesClient("test-key");
+  const food = (id: string, name: string, lat: number, lng: number, primaryType: string, extra: Record<string, unknown> = {}) =>
+    raw(id, name, lat, lng, { primaryType, types: [primaryType, "restaurant", "food"], ...extra });
+
+  it("rejects cities and people when only food places are allowed", async () => {
+    mockGoogle({
+      "lucali": [raw("person", "Lucali Photography", 40.72, -74.04, { types: ["point_of_interest"] })],
+    });
+    expect(await resolveBranch(client, place({ name: "lucali", food_only: true }), HOME_JC)).toBeNull();
+  });
+
+  it("prefers the food business over a same-named non-food result", async () => {
+    mockGoogle({
+      "Lucali": [
+        raw("gallery", "Lucali", 40.7, -74.0, { types: ["art_gallery"] }),
+        food("pizza", "Lucali", 40.6806, -74.0005, "pizza_restaurant"),
+      ],
+    });
+    const res = await resolveBranch(client, place({ name: "Lucali" }), HOME_JC);
+    expect(res?.best.id).toBe("pizza");
+  });
+
+  it("finds a chain's other branches from a branch-specific location tag", async () => {
+    const site = (slug: string) => ({ websiteUri: `https://shakeshack.com/location/${slug}` });
+    const calls = mockGoogle({
+      "Shake Shack Madison Square Park": [food("msp", "Shake Shack Madison Square Park", 40.7414, -73.9882, "hamburger_restaurant", site("msp"))],
+      "Shake Shack": [
+        food("msp", "Shake Shack Madison Square Park", 40.7414, -73.9882, "hamburger_restaurant", site("msp")),
+        food("jc", "Shake Shack Jersey City", 40.7196, -74.0413, "hamburger_restaurant", site("jc")),
+        food("fake", "Shake Shack Fan Club", 40.72, -74.04, "bar", { websiteUri: "https://fans.example.com" }),
+      ],
+    });
+    const res = await resolveBranch(client, place({ name: "Shake Shack Madison Square Park", food_only: true }), HOME_JC);
+    expect(res?.best.id).toBe("jc");
+    expect(res?.branches.map((b) => b.id).sort()).toEqual(["jc", "msp"]);
+    expect(calls.map((c) => c.textQuery)).toContain("Shake Shack");
+  });
+
+  it.each([
+    [["pizza_restaurant"], "Pizza"],
+    [["mexican_restaurant"], "Tacos & Mexican"],
+    [["coffee_shop"], "Coffee & Cafe"],
+    [["bakery", "cafe"], "Bakery & Desserts"],
+    [["ramen_restaurant", "japanese_restaurant"], "Ramen & Noodles"],
+    [["cocktail_bar"], "Bar & Drinks"],
+    [["barbecue_restaurant"], "BBQ"],
+    [["korean_barbecue_restaurant"], "Korean"],
+    [["vegan_restaurant"], "Vegetarian & Vegan"],
+    [["restaurant"], "Other"],
+  ])("maps %j to %s", (types, expected) => {
+    expect(guessCategory(types)).toBe(expected);
+  });
+
+  it("falls back to cuisine words when Google only says restaurant", () => {
+    const c = toCandidate(raw("x", "Taqueria Ramirez", 1, 1, { primaryType: "restaurant", types: ["restaurant"] }), null);
+    expect(categoryFor(c, "")).toBe("Tacos & Mexican");
+    expect(isFoodPlace(c)).toBe(true);
+    expect(cuisineFor({ ...c, typeLabel: "Mexican Restaurant" })).toBe("Mexican");
+  });
+
+  it("names chains by what their branches share", () => {
+    const b = (name: string) => toCandidate(raw(name, name, 1, 1), null);
+    expect(businessName(b("Shake Shack Herald Square"), [b("Shake Shack Herald Square"), b("Shake Shack Grand Central")])).toBe("Shake Shack");
+    expect(businessName(b("Din Tai Fung"), [b("Din Tai Fung"), b("Din Tai Fung Glendale")])).toBe("Din Tai Fung");
+    expect(businessName(b("Joe's Pizza Broadway"), [b("Joe's Pizza Broadway")])).toBe("Joe's Pizza Broadway");
+    expect(brandQuery("Shake Shack Madison Square Park")).toBe("Shake Shack");
+    expect(brandQuery("Lucali")).toBe("");
   });
 });

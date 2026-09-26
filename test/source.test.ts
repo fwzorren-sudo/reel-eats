@@ -1,6 +1,17 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
-import { canonicalUrl, extractFirstUrl, instagramParts, parseInstagramEmbed, parseOpenGraph } from "../src/source";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  canonicalUrl,
+  extractFirstUrl,
+  extractMentions,
+  fetchSourceMeta,
+  instagramParts,
+  mapApifyItem,
+  parseInstagramEmbed,
+  parseOpenGraph,
+} from "../src/source";
+
+afterEach(() => vi.unstubAllGlobals());
 
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8");
 
@@ -60,5 +71,62 @@ describe("parseOpenGraph", () => {
       '<html><head><meta property="og:title" content="Best Ramen in LA"><meta name="description" content="Tsujita on Sawtelle"></head></html>',
     );
     expect(meta.caption).toBe("Best Ramen in LA\nTsujita on Sawtelle");
+  });
+});
+
+describe("Apify", () => {
+  const env = { APIFY_TOKEN: "apify-test" } as unknown as import("../src/types").Env;
+  const item = {
+    caption: "Birria heaven 🌮 @TacosDelNorte. Thanks @nycfoodie",
+    ownerUsername: "nycfoodie",
+    ownerFullName: "NYC Foodie",
+    locationName: "Tacos Del Norte",
+    mentions: ["tacosdelnorte"],
+    taggedUsers: [{ username: "TacosDelNorte", full_name: "Tacos Del Norte" }],
+    displayUrl: "https://scontent.example/thumb.jpg",
+  };
+
+  it("maps a scraper result and drops the poster from mentions", () => {
+    const m = mapApifyItem("https://www.instagram.com/reel/ABC/", item);
+    expect(m).toMatchObject({
+      via: "apify",
+      author: "nycfoodie",
+      authorFullName: "NYC Foodie",
+      locationName: "Tacos Del Norte",
+      mentions: ["tacosdelnorte"],
+      tagged: [{ username: "tacosdelnorte", fullName: "Tacos Del Norte" }],
+    });
+  });
+
+  it("calls the Instagram Scraper with the reel link and a bearer token", async () => {
+    let seen: { url: string; init: RequestInit } | null = null;
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      seen = { url, init };
+      return new Response(JSON.stringify([item]), { status: 200 });
+    });
+    const m = await fetchSourceMeta("https://www.instagram.com/reels/ABC/?igsh=x", env);
+    expect(m.via).toBe("apify");
+    expect(seen!.url).toBe("https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?timeout=120&maxItems=1");
+    expect(new Headers(seen!.init.headers).get("authorization")).toBe("Bearer apify-test");
+    expect(JSON.parse(String(seen!.init.body))).toMatchObject({ directUrls: ["https://www.instagram.com/reel/ABC/"], resultsType: "posts", resultsLimit: 1 });
+  });
+
+  it("falls back to Instagram's own page when Apify fails", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      urls.push(url);
+      if (url.includes("apify")) return new Response('{"error":{"type":"not-enough-usage"}}', { status: 402 });
+      return new Response(fixture("ig-embed.html"), { status: 200 });
+    });
+    const m = await fetchSourceMeta("https://www.instagram.com/reel/ABC/", env);
+    expect(m.via).toBe("embed");
+    expect(m.mentions).toEqual(["tacosdelnorte"]);
+    expect(urls[1]).toBe("https://www.instagram.com/p/ABC/embed/captioned/");
+  });
+});
+
+describe("extractMentions", () => {
+  it("finds handles but not emails", () => {
+    expect(extractMentions("Go to @Joes.Pizza. and @l_industrie! mail me@example.com")).toEqual(["joes.pizza", "l_industrie"]);
   });
 });

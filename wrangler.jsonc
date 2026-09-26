@@ -21,8 +21,14 @@
       "migrations_dir": "migrations"
     }
   ],
+  // Cloudflare Workers AI reads captions. It comes with the Cloudflare account; no key needed.
+  "ai": { "binding": "AI" },
+  // Finish any share whose background job was cut short.
+  "triggers": { "crons": ["*/10 * * * *"] },
   "vars": {
-    // Claude model used to identify restaurants in a reel.
+    // Workers AI model that reads captions, or "off" to use rules only.
+    "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    // Only used if you add an ANTHROPIC_API_KEY secret. Claude then replaces Workers AI.
     "CLAUDE_MODEL": "claude-opus-5",
     // low | medium | high. Lower is cheaper and faster.
     "CLAUDE_EFFORT": "medium",

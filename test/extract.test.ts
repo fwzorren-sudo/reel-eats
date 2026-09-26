@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { extractPlaces, sanitizeExtraction } from "../src/extract";
+import { emptyMeta } from "../src/source";
 import type { Env } from "../src/types";
 
 const env = { ANTHROPIC_API_KEY: "sk-test", CLAUDE_MODEL: "claude-opus-5", CLAUDE_EFFORT: "medium" } as Env;
@@ -76,7 +77,7 @@ describe("extractPlaces", () => {
 
     const out = await extractPlaces(env, {
       url: "https://www.instagram.com/reel/ABC/",
-      meta: { url: "", author: "nycfoodie", caption: "Best birria @tacosdelnorte", locationName: "Tacos Del Norte", thumbnail: "" },
+      meta: { ...emptyMeta(""), author: "nycfoodie", caption: "Best birria @tacosdelnorte", locationName: "Tacos Del Norte" },
       sharedText: null,
       note: null,
       image: null,

@@ -50,6 +50,9 @@ export function namesMatch(placeName: string, wanted: string): boolean {
   if (compactA === compactB) return true;
   const [cShort, cLong] = compactA.length <= compactB.length ? [compactA, compactB] : [compactB, compactA];
   if (cShort.length >= 6 && cLong.startsWith(cShort)) return true;
+  // Instagram handles run words together: "tacosdelnorte", "eat.lucali", "joespizzanyc".
+  const wantedIsHandle = !/\s/.test(wanted.trim());
+  if (wantedIsHandle && cShort.length >= 6 && cLong.includes(cShort)) return true;
 
   const placeTokens = tokens(placeName);
   const wantedTokens = tokens(wanted);

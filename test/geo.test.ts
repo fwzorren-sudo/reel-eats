@@ -14,6 +14,9 @@ describe("namesMatch", () => {
     ["The Smith", "Smith"],
     ["L'Industrie Pizzeria", "L'industrie"],
     ["In-N-Out Burger", "In N Out"],
+    ["Tacos Del Norte", "tacosdelnorte"],
+    ["Lucali", "eat.lucali"],
+    ["Joe's Pizza", "joespizzanyc"],
   ];
   const no: [string, string][] = [
     ["Joe's Shanghai", "Joe's Pizza"],
@@ -21,6 +24,7 @@ describe("namesMatch", () => {
     ["Pizza Hut", "Joe's Pizza"],
     ["Starbucks", "Blue Bottle Coffee"],
     ["Joe's Pizza", ""],
+    ["Pizza", "joespizzanyc"],
   ];
   it.each(yes)("%s ≈ %s", (a, b) => expect(namesMatch(a, b)).toBe(true));
   it.each(no)("%s ≠ %s", (a, b) => expect(namesMatch(a, b)).toBe(false));

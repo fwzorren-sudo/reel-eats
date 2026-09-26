@@ -46,6 +46,7 @@ const state = {
   me: null,
   sheet: null,
   selectedId: null,
+  features: { engine: "rules", screenshots: false, apify: false },
 };
 
 /* ---------- small helpers ---------- */
@@ -154,6 +155,7 @@ async function refresh({ rerenderSheet = false } = {}) {
   state.units = data.units || "mi";
   state.places = (data.places || []).map(parsePlace);
   state.shares = data.shares || [];
+  if (data.features) state.features = data.features;
   render();
   if (rerenderSheet && state.sheet?.type === "place") openPlace(state.sheet.id, { keepScroll: true });
 
@@ -461,6 +463,19 @@ function renderSettings() {
     </section>
 
     <section class="panel">
+      <h2>How reels are read</h2>
+      <p>${
+        state.features.apify ? "Apify fetches each reel's caption, location tag and tagged accounts." : "Captions come from Instagram's public page, which Instagram sometimes blocks. Adding an Apify token makes this reliable."
+      } ${
+        {
+          claude: "Claude works out which restaurant the reel shows.",
+          "workers-ai": "Cloudflare Workers AI and the post's 📍 pins, location tag and @mentions point to the restaurant.",
+          rules: "The post's 📍 pins, location tag and @mentions point to the restaurant.",
+        }[state.features.engine] || ""
+      } Google Maps confirms it and finds the branch closest to home.</p>
+    </section>
+
+    <section class="panel">
       <h2>Your list</h2>
       <p>After moving, re-check every chain for the branch closest to your new home. This runs a Google search per place.</p>
       <div class="btn-row">
@@ -723,7 +738,7 @@ async function patchPlace(id, body, msg) {
 /* ---------- adding ---------- */
 function openAdd(prefill = {}) {
   openSheet(
-    `${sheetHead("Add a place", "Paste a reel link, type a name, or add a screenshot")}
+    `${sheetHead("Add a place", state.features.screenshots ? "Paste a reel link, type a name, or add a screenshot" : "Paste a reel link or type a name")}
     <div class="sheet-body">
       <form class="stack" id="add-form">
         <label>Reel or post link
@@ -736,10 +751,14 @@ function openAdd(prefill = {}) {
           <input type="text" id="add-note" placeholder="Tacos Del Norte, Queens" value="${esc(prefill.note || "")}" />
           <span class="hint">Optional with a link. It helps when the caption doesn't name the place.</span>
         </label>
-        <label>Screenshot
+        ${
+          state.features.screenshots
+            ? `<label>Screenshot
           <input type="file" id="add-image" accept="image/*" />
           <span class="hint">Optional. A screenshot of the caption or location tag works well.</span>
-        </label>
+        </label>`
+            : ""
+        }
         <div class="btn-row"><button class="btn primary" type="submit">Save place</button></div>
       </form>
     </div>`,
@@ -968,7 +987,7 @@ function bindUI() {
       e.preventDefault();
       const url = $("#add-url").value.trim();
       const note = $("#add-note").value.trim();
-      const file = $("#add-image").files?.[0];
+      const file = $("#add-image")?.files?.[0];
       if (!url && !note && !file) return toast("Paste a link, type a name, or pick a screenshot.");
       const payload = { url, note };
       if (file) Object.assign(payload, await imageToJpegBase64(file));

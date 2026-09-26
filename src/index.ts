@@ -9,12 +9,13 @@ import {
   listOpenShares,
   listPlaces,
   setSetting,
+  STALE_CLAIM_MS,
   updatePlace,
   updateShare,
 } from "./db";
 import { distanceMeters } from "./geo";
 import { isSupportedImageType } from "./extract";
-import { placesClient, processShare, recheckPlace, summarize } from "./pipeline";
+import { engineFor, placesClient, processShare, recheckPlace, summarize } from "./pipeline";
 import { geocodeHome, PlacesError } from "./places";
 import { canonicalUrl, extractFirstUrl } from "./source";
 import { CATEGORIES, type Env, type Home, type PlaceCandidate, type PlaceRow } from "./types";
@@ -121,6 +122,21 @@ async function handleShare(req: Request, env: Env, ctx: ExecutionContext, url: U
     imageType = sniffImageType(imageBase64) || input.image_type || "";
     if (!isSupportedImageType(imageType)) {
       return reply({ status: "error", message: "Send screenshots as JPEG or PNG. HEIC photos need converting first." }, 415);
+    }
+  }
+
+  if (imageBase64 && engineFor(env) !== "claude") {
+    // Without Claude nothing can read the picture, so don't store it.
+    imageBase64 = null;
+    imageType = null;
+    if (!sourceUrl && !note && !sharedText) {
+      return reply(
+        {
+          status: "error",
+          message: "Reading screenshots needs the Claude option. Type the restaurant's name instead, or use the iPhone screenshot shortcut, which reads the text on your phone.",
+        },
+        422,
+      );
     }
   }
 
@@ -246,7 +262,9 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
 
   if (path === "/api/state" && method === "GET") {
     const [home, units, places, shares] = await Promise.all([getHome(db), getUnits(db), listPlaces(db), listOpenShares(db)]);
-    return json({ home, units, places, shares, categories: CATEGORIES });
+    const engine = engineFor(env);
+    const features = { engine, screenshots: engine === "claude", apify: !!env.APIFY_TOKEN };
+    return json({ home, units, places, shares, categories: CATEGORIES, features });
   }
 
   if (path === "/api/share" && method === "POST") return handleShare(req, env, ctx, url);
@@ -333,5 +351,18 @@ export default {
       console.error(err);
       return json({ error: err instanceof Error ? err.message : "Unexpected error" }, 500);
     }
+  },
+
+  /** Every few minutes, finish shares whose background job was cut short. */
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    const t = Date.now();
+    const { results } = await env.DB.prepare(
+      `SELECT id FROM shares
+       WHERE (status = 'pending' AND created_at < ?) OR (status = 'processing' AND claimed_at < ?)
+       ORDER BY created_at LIMIT 3`,
+    )
+      .bind(t - 60_000, t - STALE_CLAIM_MS)
+      .all<{ id: string }>();
+    for (const { id } of results) await processShare(env, id);
   },
 } satisfies ExportedHandler<Env>;

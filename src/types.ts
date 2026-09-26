@@ -1,16 +1,27 @@
 export interface Env {
   DB: D1Database;
   ASSETS: Fetcher;
-  ANTHROPIC_API_KEY: string;
+  /** Cloudflare Workers AI. Included with every Cloudflare account; no key needed. */
+  AI?: Ai;
   GOOGLE_MAPS_API_KEY: string;
   APP_TOKEN: string;
+  /** Optional. Reads reels through Apify, which Instagram blocks far less often. */
+  APIFY_TOKEN?: string;
+  APIFY_ACTOR?: string;
+  /** Workers AI model used to read captions, or "off". */
+  AI_MODEL?: string;
+  /** Optional. With a key set, Claude identifies venues instead of Workers AI. */
+  ANTHROPIC_API_KEY?: string;
   CLAUDE_MODEL?: string;
   CLAUDE_EFFORT?: string;
   CLAUDE_WEB_SEARCH?: string;
   /** Test hooks: point the Worker at local mock servers. Leave unset in production. */
   ANTHROPIC_BASE_URL?: string;
   PLACES_BASE_URL?: string;
+  APIFY_BASE_URL?: string;
 }
+
+export type Engine = "claude" | "workers-ai" | "rules";
 
 export interface Home {
   address: string;
@@ -60,6 +71,12 @@ export interface ExtractedPlace {
   dishes: string[];
   multi_location: boolean;
   confidence: "high" | "medium" | "low";
+  /** Only accept Google results typed as food or drink businesses. */
+  food_only?: boolean;
+  /** Save it without a location when Google can't find it. */
+  keep_unresolved?: boolean;
+  /** Take the category from Google's place type instead of `category`. */
+  category_from_google?: boolean;
 }
 
 export interface Extraction {
@@ -84,14 +101,22 @@ export interface PlaceCandidate {
   businessStatus: string;
   typeLabel: string;
   distanceM: number | null;
+  primaryType: string;
+  types: string[];
 }
 
 export interface SourceMeta {
   url: string;
   author: string;
+  authorFullName: string;
   caption: string;
   locationName: string;
   thumbnail: string;
+  /** Accounts @mentioned in the caption, without the @. */
+  mentions: string[];
+  /** Accounts tagged in the video or listed as collaborators. */
+  tagged: { username: string; fullName: string }[];
+  via: "apify" | "embed" | "preview" | "none";
 }
 
 export interface ShareRow {

@@ -1,5 +1,5 @@
 import { distanceMeters, matchesAny, websiteHost } from "./geo";
-import type { ExtractedPlace, Home, PlaceCandidate } from "./types";
+import type { Category, ExtractedPlace, Home, PlaceCandidate } from "./types";
 
 const FIELDS = [
   "id",
@@ -14,6 +14,8 @@ const FIELDS = [
   "priceLevel",
   "businessStatus",
   "primaryTypeDisplayName",
+  "primaryType",
+  "types",
   "addressComponents",
 ];
 
@@ -41,6 +43,8 @@ interface RawPlace {
   priceLevel?: string;
   businessStatus?: string;
   primaryTypeDisplayName?: { text?: string };
+  primaryType?: string;
+  types?: string[];
   addressComponents?: { longText?: string; shortText?: string; types?: string[] }[];
 }
 
@@ -118,7 +122,69 @@ export function toCandidate(p: RawPlace, home: Home | null): PlaceCandidate {
     businessStatus: p.businessStatus ?? "",
     typeLabel: p.primaryTypeDisplayName?.text ?? "",
     distanceM: home ? Math.round(distanceMeters(home.lat, home.lng, lat, lng)) : null,
+    primaryType: p.primaryType ?? "",
+    types: p.types ?? [],
   };
+}
+
+const FOOD_TYPES = new Set([
+  "restaurant", "food", "cafe", "coffee_shop", "bakery", "bar", "pub", "meal_takeaway", "meal_delivery",
+  "ice_cream_shop", "dessert_shop", "donut_shop", "bagel_shop", "sandwich_shop", "deli", "juice_shop",
+  "tea_house", "food_court", "confectionery", "chocolate_shop", "candy_store", "cafeteria", "diner",
+  "bistro", "brewpub", "beer_garden", "brewery", "winery", "cat_cafe", "dog_cafe", "acai_shop",
+  "food_truck", "night_club",
+]);
+
+/** Is this Google result a food or drink business, as opposed to a city, park or person? */
+export function isFoodPlace(c: Pick<PlaceCandidate, "primaryType" | "types">): boolean {
+  return [c.primaryType, ...c.types].some((t) => t && (FOOD_TYPES.has(t) || /_(restaurant|bar|shop|cafe)$/.test(t)));
+}
+
+const CATEGORY_RULES: [RegExp, Category][] = [
+  [/vegan|vegetarian/, "Vegetarian & Vegan"],
+  [/pizz/, "Pizza"],
+  [/burger/, "Burgers"],
+  [/sandwich|deli\b|delicatessen|hoagie|sub shop/, "Sandwiches & Deli"],
+  [/mexican|taco|tex mex|burrito|taqueria|birria/, "Tacos & Mexican"],
+  [/seafood|oyster|fish|lobster|crab/, "Seafood"],
+  [/steak/, "Steakhouse"],
+  [/ramen|noodle|udon|pho\b/, "Ramen & Noodles"],
+  [/sushi|japanese|izakaya|omakase/, "Japanese & Sushi"],
+  [/italian|pasta|trattoria/, "Italian"],
+  [/chinese|dim sum|dumpling|cantonese|sichuan|szechuan|hunan/, "Chinese"],
+  [/korean/, "Korean"],
+  [/thai/, "Thai"],
+  [/vietnamese|banh mi/, "Vietnamese"],
+  [/indian|pakistani|nepal|bangladeshi|sri lankan|curry/, "Indian"],
+  [/mediterranean|middle eastern|greek|lebanese|turkish|israeli|persian|afghan|falafel|shawarma|kebab/, "Middle Eastern & Mediterranean"],
+  [/latin|brazilian|peruvian|caribbean|cuban|colombian|argentin|venezuelan|salvadoran|puerto rican|dominican|jamaican|arepa|empanada/, "Latin & Caribbean"],
+  [/barbecue|bbq|smokehouse/, "BBQ"],
+  [/breakfast|brunch|pancake|waffle/, "Breakfast & Brunch"],
+  [/bakery|dessert|ice cream|gelato|donut|doughnut|bagel|confection|chocolate|pastry|patisserie|cake|cookie|candy|acai/, "Bakery & Desserts"],
+  [/coffee|cafe|espresso|tea house|matcha/, "Coffee & Cafe"],
+  [/\bbar\b|pub|brew|wine|beer|cocktail|lounge|night club|speakeasy|winery|tavern/, "Bar & Drinks"],
+  [/american|fast food|chicken|diner|hot dog|soul food|southern|wings|comfort/, "American & Comfort"],
+];
+
+/** Pick a category from Google place types and any cuisine words we have. */
+export function guessCategory(texts: (string | null | undefined)[]): Category {
+  const hay = texts
+    .filter(Boolean)
+    .map((t) => t!.toLowerCase().replace(/_/g, " "))
+    .join(" | ");
+  for (const [re, cat] of CATEGORY_RULES) if (re.test(hay)) return cat;
+  return "Other";
+}
+
+export function categoryFor(c: PlaceCandidate, cuisine = ""): Category {
+  const fromPrimary = guessCategory([c.primaryType, c.typeLabel]);
+  if (fromPrimary !== "Other") return fromPrimary;
+  return guessCategory([cuisine, c.name, ...c.types]);
+}
+
+export function cuisineFor(c: PlaceCandidate): string {
+  const label = c.typeLabel.replace(/\s*restaurant$/i, "").trim();
+  return /^(restaurant|food|point of interest|establishment)$/i.test(label) ? "" : label;
 }
 
 export async function geocodeHome(client: PlacesClient, address: string): Promise<Home | null> {
@@ -126,6 +192,12 @@ export async function geocodeHome(client: PlacesClient, address: string): Promis
   const top = results[0];
   if (!top) return null;
   return { address: top.address || address, lat: top.lat, lng: top.lng };
+}
+
+/** "Shake Shack Madison Square Park" -> "Shake Shack". Short names are left alone. */
+export function brandQuery(name: string): string {
+  const words = name.replace(/\s*[-|@(].*$/, "").trim().split(/\s+/);
+  return words.length >= 3 ? words.slice(0, 2).join(" ") : "";
 }
 
 export interface Resolution {
@@ -155,9 +227,15 @@ export async function resolveBranch(client: PlacesClient, place: ExtractedPlace,
   ]);
 
   const open = (c: PlaceCandidate) => c.businessStatus !== "CLOSED_PERMANENTLY" && matchesAny(c.name, names);
-  const nearMatches = near.filter(open);
-  const hintMatches = hinted.filter(open);
-  const plainMatches = plain.filter(open);
+  // Prefer food and drink businesses. With food_only, nothing else is accepted.
+  const foodFirst = (list: PlaceCandidate[]) => {
+    const matched = list.filter(open);
+    const food = matched.filter(isFoodPlace);
+    return food.length || place.food_only ? food : matched;
+  };
+  const nearMatches = foodFirst(near);
+  const hintMatches = foodFirst(hinted);
+  const plainMatches = foodFirst(plain);
 
   let pool: PlaceCandidate[];
   if (hintMatches.length) {
@@ -168,9 +246,23 @@ export async function resolveBranch(client: PlacesClient, place: ExtractedPlace,
     pool = [...nearMatches, ...plainMatches];
   }
 
+  if (!pool.length) return null;
+
+  // Chains: a location tag like "Shake Shack Madison Square Park" names one branch.
+  // Search the brand near home and keep results that share the same website.
+  const host = websiteHost(pool[0].website);
+  const brand = brandQuery(pool[0].name);
+  if (home && host && brand && brand.toLowerCase() !== query.toLowerCase()) {
+    try {
+      const siblings = await client.textSearch(brand, { bias: home });
+      pool.push(...siblings.filter((c) => c.businessStatus !== "CLOSED_PERMANENTLY" && websiteHost(c.website) === host));
+    } catch {
+      /* the branch we already have is still good */
+    }
+  }
+
   const seen = new Set<string>();
   pool = pool.filter((c) => (seen.has(c.id) ? false : (seen.add(c.id), true)));
-  if (!pool.length) return null;
 
   if (home) pool.sort((a, b) => (a.distanceM ?? Infinity) - (b.distanceM ?? Infinity));
   return { best: pool[0], branches: pool.slice(0, 12) };

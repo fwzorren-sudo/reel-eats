@@ -2,6 +2,8 @@
 
 A personal catalog for restaurants you see in Instagram reels. Share a reel from Instagram, and Reel Eats works out which restaurant it shows. It finds the restaurant on Google Maps and, for chains, keeps the branch closest to your home. It then pins the place on your map.
 
+It runs on free tiers. You don't need a Claude or OpenAI key.
+
 The phone app has four views:
 
 - **Map**: every saved place as a pin, colored by whether you've been, with your home marked.
@@ -9,7 +11,7 @@ The phone app has four views:
 - **Categories**: tiles such as Pizza, Tacos & Mexican or Coffee & Cafe, with counts. Tap one to filter the list.
 - **Settings**: home address, miles or kilometers, sharing setup, re-checking branches after a move, and CSV or JSON export.
 
-Each place opens a detail card. It has Google Maps and Apple Maps links, a link back to the reel, the dishes the reel highlighted, and Google's rating and price level. You can mark a place visited, rate it, add notes, pick a different branch, or fix a wrong match.
+Each place opens a detail card. It has Google Maps and Apple Maps links, a link back to the reel, and Google's rating and price level. You can mark a place visited, rate it, add notes, pick a different branch, or fix a wrong match.
 
 ## How it works
 
@@ -17,27 +19,38 @@ Each place opens a detail card. It has Google Maps and Apple Maps links, a link 
 Instagram share button
   -> iPhone Shortcut (or the installed app on Android)
   -> POST /api/share on your Cloudflare Worker
-       1. read the reel's caption, author and location tag from Instagram's public embed page
-       2. Claude identifies the venue(s), using a few web searches if the caption only has an @handle
-       3. Google Places searches near your home and in the reel's city, and keeps the closest matching branch
+       1. read the reel: Apify's Instagram Scraper if you add a token, otherwise Instagram's public page
+       2. collect likely venue names:
+            - a name you typed
+            - "📍" lines in the caption
+            - the location tag
+            - Cloudflare Workers AI reading the caption
+            - if none of those work: tagged accounts, @mentions and the poster
+       3. Google Places checks each name, keeps only real food and drink businesses,
+          and picks the branch closest to your home
        4. save to a Cloudflare D1 database
-  -> the phone app (a web app you add to your home screen) shows it on the map
+  -> the phone app shows it on the map
 ```
 
-A reel that lists several places ("top 5 tacos in Austin") becomes several entries. Sharing the same reel twice doesn't create duplicates. Saving a different branch of a chain you already have is treated as a duplicate too.
+Google does the checking, so a wrong guess from the caption usually just finds nothing. An @mention of a friend or a food blogger doesn't match a restaurant and is skipped.
 
-When the reel doesn't name the place, the share shows up in the app under "Just shared" with a box for the name. Type it and Reel Eats retries. You can also add a place by pasting a link, typing a name, or uploading a screenshot.
+A reel that pins several places ("top 5 tacos in Austin") becomes several entries. Sharing the same reel twice doesn't create duplicates. Saving a different branch of a chain you already have counts as a duplicate too.
+
+When nothing in the reel leads to a restaurant, the share waits in the app under "Just shared" with a box for the name. Type it and Reel Eats retries.
 
 ## What you need
 
-| Item | Where | Cost |
+| Item | Needed? | Cost |
 | --- | --- | --- |
-| Cloudflare account | dash.cloudflare.com | Free plan covers Workers and D1 for personal use |
-| Anthropic API key | console.anthropic.com | Pay per use. See the estimate below |
-| Google Maps Platform API key with **Places API (New)** enabled | console.cloud.google.com | Google gives a free monthly allowance per Places API SKU. A personal list uses a small part of it |
-| Node.js 20 or newer | nodejs.org | Free |
+| Cloudflare account | Yes | The free plan covers the Worker, the database and Workers AI for personal use |
+| Google Maps Platform key with **Places API (New)** | Yes | Google gives a free monthly allowance per Places API SKU. A personal list uses a small part of it |
+| Apify account and API token | Recommended | Apify charges per result. The free plan's monthly credit normally covers a personal list. Check the Instagram Scraper's page for current pricing |
+| Node.js 20 or newer | Yes, to deploy | Free |
+| Anthropic API key | No | Optional upgrade, see below |
 
-**Rough Claude cost:** with the default model, Claude Opus 5 at medium effort, expect a few cents per saved reel. It can reach about 15 cents when Claude has to run web searches. Set `CLAUDE_EFFORT` to `low` to spend less. Set a monthly spend limit in the Anthropic console, and a budget alert in Google Cloud.
+**Why Apify helps.** Instagram often refuses requests from cloud servers. When that happens, Reel Eats only has the link, so it asks you for the name. Apify fetches the caption, location tag and tagged accounts reliably.
+
+**Workers AI allowance.** Cloudflare includes 10,000 Workers AI "neurons" a day for free. At Cloudflare's published rates for the default Llama 3.3 70B model, one reel uses roughly 50 to 100, so the free allowance covers about 100 reels a day.
 
 ## Setup
 
@@ -56,13 +69,15 @@ Run these from this folder.
    npx wrangler d1 create reel-eats
    ```
 
-3. **Create the Google key.** In Google Cloud, create a project, enable **Places API (New)**, and create an API key. Under the key's API restrictions, allow only Places API (New).
+3. **Create the Google key.** In Google Cloud, create a project, enable **Places API (New)**, and create an API key. Under the key's API restrictions, allow only Places API (New). Adding a budget alert is a good idea.
 
-4. **Store the three secrets.** Each command asks you to paste the value. The access code is a password you make up. The phone app and the Shortcut both use it.
+4. **Get an Apify token.** Sign up at apify.com. In Apify Console, open **Settings**, then **API & Integrations**, and copy your personal API token. Reel Eats uses Apify's own **Instagram Scraper** actor. You don't need to set it up in Apify first.
+
+5. **Store the secrets.** Each command asks you to paste the value. The access code is a password you make up. The phone app and the Shortcut both use it.
 
    ```sh
-   npx wrangler secret put ANTHROPIC_API_KEY
    npx wrangler secret put GOOGLE_MAPS_API_KEY
+   npx wrangler secret put APIFY_TOKEN
    npx wrangler secret put APP_TOKEN
    ```
 
@@ -72,13 +87,13 @@ Run these from this folder.
    openssl rand -base64 24
    ```
 
-5. **Deploy.** This creates the tables and publishes the Worker. It prints your app's address, which looks like `https://reel-eats.<your-subdomain>.workers.dev`.
+6. **Deploy.** This creates the tables and publishes the Worker. It prints your app's address, which looks like `https://reel-eats.<your-subdomain>.workers.dev`.
 
    ```sh
    npm run deploy
    ```
 
-6. **Open the app on your phone.** Visit the address, enter the access code, then go to Settings and save your home address.
+7. **Open the app on your phone.** Visit the address, enter the access code, then go to Settings and save your home address.
    - iPhone: in Safari, tap Share, then **Add to Home Screen**.
    - Android: in Chrome, tap the menu, then **Install app**.
 
@@ -95,17 +110,17 @@ iPhone web apps can't appear in the share menu, so a Shortcut does it. You build
    - Request Body: **Form**. Add a **Text** field named `url` and set its value to the **Shortcut Input** variable.
 4. Add the action **Show Notification** and set its text to **Contents of URL**.
 
-To use it, open a reel in Instagram and tap the paper-plane Share button. Then open the iPhone share menu from the end of the bottom row and pick **Reel Eats**. A notification confirms the save, and the app shows the place a few seconds later.
+To use it, open a reel in Instagram and tap the paper-plane Share button. Then open the iPhone share menu from the end of the bottom row and pick **Reel Eats**. A notification confirms the save, and the app shows the place shortly after.
 
-**Optional name prompt.** Add **Ask for Input** before step 3 with the prompt "Restaurant name (optional)". Then add a second Text form field named `note` set to **Provided Input**. This costs one extra tap per share, but it rescues reels whose captions never name the place.
+**Optional name prompt.** Add **Ask for Input** before step 3 with the prompt "Restaurant name (optional)". Then add a second Text form field named `note` set to **Provided Input**. This costs one extra tap per share. A typed name always wins, which rescues reels whose captions never name the place.
 
-**Wait for the result.** Change the URL to end in `?format=text&wait=1`. The notification then names the restaurant and its distance from home. The share menu stays open for about 10 to 30 seconds while it works.
+**Wait for the result.** Change the URL to end in `?format=text&wait=1`. The notification then names the restaurant and its distance from home. The share menu stays open for about 10 to 40 seconds while it works.
 
-**Screenshots.** Make a second shortcut named **Reel Eats Screenshot** that receives **Images**. Add **Convert Image** to JPEG, then **Resize Image** to width 1280. Next, add **Get Contents of URL** with the same URL and header, and a Form body with a **File** field named `image` set to the resized image. Finish with **Show Notification**. Share a screenshot of the caption or location tag from Photos.
+**Screenshots.** Your iPhone can read the text in a screenshot, so no AI service is needed for this. Make a second shortcut named **Reel Eats Screenshot** that receives **Images**. Add **Extract Text from Image** with the Shortcut Input. Then add **Get Contents of URL** with the same URL, method and header. Use a Form body with a **Text** field named `text` set to **Extracted Text**, and finish with **Show Notification**. Share a screenshot of the caption or location tag from Photos.
 
 ## Share from Instagram on Android
 
-Install the app from Chrome as in setup step 6. After that, **Reel Eats** appears in Android's share menu. In Instagram, tap Share on a reel, then the share-menu icon at the end of the bottom row, then Reel Eats. The app opens and shows the result. It can take a minute after installing before Reel Eats shows up in the menu.
+Install the app from Chrome as in setup step 7. After that, **Reel Eats** appears in Android's share menu. In Instagram, tap Share on a reel, then the share-menu icon at the end of the bottom row, then Reel Eats. The app opens and shows the result. It can take a minute after installing before Reel Eats shows up in the menu.
 
 ## Using the app
 
@@ -115,23 +130,34 @@ Install the app from Chrome as in setup step 6. After that, **Reel Eats** appear
 - **Moving house**: save the new address in Settings. Distances update right away, and chains switch to the closest branch Reel Eats already knows about. Tap **Re-check nearest branches** to search again around the new home.
 - **Backups**: Settings exports the whole list as CSV or JSON.
 
+Every 10 minutes the Worker also finishes any share whose background job was cut short, so a reel you shared still lands even if you never open the app.
+
 ## Settings you can change
 
 These live under `vars` in `wrangler.jsonc`. Redeploy after editing.
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `CLAUDE_MODEL` | `claude-opus-5` | The Claude model that identifies restaurants. |
-| `CLAUDE_EFFORT` | `medium` | `low`, `medium` or `high`. Lower is cheaper and faster. Ignored for Haiku. |
+| `AI_MODEL` | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | Workers AI model that reads captions. Set it to `off` to use only pins, tags and mentions. |
+| `APIFY_ACTOR` | `apify~instagram-scraper` | Apify actor that reads the reel. Add it under `vars` only if you want a different actor. |
+
+### Optional: use Claude instead
+
+With an Anthropic API key, Claude replaces Workers AI. Claude is better at captions that describe a place without naming it, and it can read uploaded screenshots in the app. Add the key with `npx wrangler secret put ANTHROPIC_API_KEY` and redeploy. A Claude.ai subscription doesn't include API access. The key comes from console.anthropic.com and is billed per use.
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `CLAUDE_MODEL` | `claude-opus-5` | The Claude model used when a key is set. |
+| `CLAUDE_EFFORT` | `medium` | `low`, `medium` or `high`. Lower is cheaper and faster. |
 | `CLAUDE_WEB_SEARCH` | `on` | Set to `off` to stop Claude from running web searches. |
 
-On Claude Opus 5 and Claude Fable models, requests opt into Anthropic's server-side fallback, `fallbacks: "default"`. If a safety check declines a request, the API re-runs it on Anthropic's recommended fallback model instead of failing. A restaurant caption is very unlikely to trigger this. To opt out, remove the `fallbacks` line in `src/extract.ts`.
+With Claude Opus 5, requests opt into Anthropic's server-side fallback, `fallbacks: "default"`. If a safety check declines a request, the API re-runs it on a fallback model instead of failing. To opt out, remove the `fallbacks` line in `src/extract.ts`.
 
 ## Limits and privacy
 
-- **Instagram can block cloud servers.** Reel Eats reads the public embed page, which usually works without logging in. When Instagram refuses, Claude sees only the link, and the app asks you for the name. The name prompt or a screenshot avoids that.
+- **Captions that never name the place.** Without Claude, Reel Eats relies on what the post points at: pins, the location tag, tagged accounts and mentions, plus Workers AI's reading of the caption. A reel that only says "best tacos ever" needs you to type the name.
 - **Private accounts and stories** can't be read.
-- **Where your data goes.** The list and your home address are stored in your own Cloudflare D1 database. Captions, your notes and screenshots are sent to the Anthropic API to identify the place. Restaurant names and your home location are sent to Google Places to find branches. A screenshot is deleted from the database once its place is saved.
+- **Where your data goes.** The list and your home address are stored in your own Cloudflare D1 database. Reel links go to Apify if you set a token. Captions go to Cloudflare Workers AI, which runs on Cloudflare's network under your account. Restaurant names and your home location go to Google Places. Nothing goes to Anthropic unless you add a Claude key.
 - **Access.** Anyone with the access code can read and change your list. Rotate it with `npx wrangler secret put APP_TOKEN`, then enter the new code on your phone and in the Shortcut.
 - **Workers free plan.** The free plan limits CPU time per request. If saves fail with a "CPU time limit" error in the Cloudflare dashboard, the Workers Paid plan raises that limit.
 
@@ -140,32 +166,36 @@ On Claude Opus 5 and Claude Fable models, requests opt into Anthropic's server-s
 ```sh
 cp .dev.vars.example .dev.vars          # fill in real keys to try the full flow
 npm run db:migrate:local
-npm run dev                             # http://localhost:8787
+npm run dev                             # http://localhost:8787, Workers AI needs `wrangler login`
 npm test                                # unit tests
 npm run typecheck
 ```
 
 ### Testing without real API keys
 
-`test/e2e/mock-upstreams.mjs` stands in for Claude, Google Places and a reel page. `test/e2e/smoke.mjs` then runs the whole API against `wrangler dev`: sharing, chains, multi-place reels, duplicates, retries, screenshots, branch switching and moving house.
+`test/e2e/mock-upstreams.mjs` stands in for Apify, Google Places, Claude and a web page. `test/e2e/smoke.mjs` runs the whole API against `wrangler dev`. It covers mentions, location tags, pins, chains, list reels, duplicates, retries, typed names, branch switching and moving house. `test/e2e/wrangler.e2e.jsonc` is the same Worker without the Workers AI binding, because that binding always needs a Cloudflare login.
 
 ```sh
 node test/e2e/mock-upstreams.mjs 8799 &
-npm run db:migrate:local
-npx wrangler dev --var APP_TOKEN:test-code --var ANTHROPIC_API_KEY:sk-test \
-  --var GOOGLE_MAPS_API_KEY:test-google-key \
-  --var ANTHROPIC_BASE_URL:http://127.0.0.1:8799 --var PLACES_BASE_URL:http://127.0.0.1:8799 &
-node test/e2e/smoke.mjs
+npx wrangler d1 migrations apply reel-eats --local -c test/e2e/wrangler.e2e.jsonc
+npx wrangler dev -c test/e2e/wrangler.e2e.jsonc --var APP_TOKEN:test-code \
+  --var GOOGLE_MAPS_API_KEY:test-google-key --var PLACES_BASE_URL:http://127.0.0.1:8799 \
+  --var APIFY_TOKEN:test-apify --var APIFY_BASE_URL:http://127.0.0.1:8799 &
+MODE=rules node test/e2e/smoke.mjs
 ```
+
+To test the Claude path, add `--var ANTHROPIC_API_KEY:sk-test --var ANTHROPIC_BASE_URL:http://127.0.0.1:8799` to `wrangler dev`, start with a fresh local database, and run with `MODE=claude`.
 
 ### Layout
 
 | Path | Contents |
 | --- | --- |
-| `src/index.ts` | API routes and access-code check |
+| `src/index.ts` | API routes, access-code check and the 10-minute cleanup job |
 | `src/pipeline.ts` | Processing a share from start to finish |
-| `src/source.ts` | Reading captions from Instagram, TikTok and other links |
-| `src/extract.ts` | The Claude request that identifies venues |
-| `src/places.ts` | Google Places search and choosing the nearest branch |
+| `src/source.ts` | Reading reels through Apify, Instagram's public page, TikTok and other links |
+| `src/identify.ts` | Finding venue names in pins, tags, mentions and typed notes |
+| `src/workersai.ts` | The Workers AI request that reads captions |
+| `src/extract.ts` | The optional Claude request |
+| `src/places.ts` | Google Places search, food filtering, categories and choosing the nearest branch |
 | `src/db.ts`, `migrations/` | D1 tables and queries |
 | `public/` | The phone app, which is plain HTML, CSS and JavaScript with no build step |

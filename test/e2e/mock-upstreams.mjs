@@ -16,6 +16,9 @@ const P = (id, name, lat, lng, extra = {}) => ({
   userRatingCount: extra.count ?? 1200,
   priceLevel: extra.price || "PRICE_LEVEL_MODERATE",
   businessStatus: "OPERATIONAL",
+  primaryType: extra.type || "restaurant",
+  primaryTypeDisplayName: { text: extra.typeLabel || "Restaurant" },
+  types: [extra.type || "restaurant", ...(extra.type === "street_address" ? [] : ["restaurant", "food"])],
   addressComponents: [
     { longText: extra.city || "New York", shortText: extra.city || "New York", types: ["locality"] },
     { longText: "New York", shortText: "NY", types: ["administrative_area_level_1"] },
@@ -23,14 +26,17 @@ const P = (id, name, lat, lng, extra = {}) => ({
 });
 
 const PLACES = {
-  home: P("home", "350 5th Ave", 40.7484, -73.9857, { address: "350 5th Ave, New York, NY 10118, USA" }),
-  tdn: P("tdn", "Tacos Del Norte", 40.7466, -73.8913, { address: "84-12 Roosevelt Ave, Queens, NY 11372", city: "Queens", price: "PRICE_LEVEL_INEXPENSIVE" }),
-  ss_msp: P("ss_msp", "Shake Shack Madison Square Park", 40.7414, -73.9882, { website: "https://shakeshack.com/location/madison-square-park", address: "Madison Ave & E 23rd St, New York, NY 10010" }),
-  ss_hs: P("ss_hs", "Shake Shack Herald Square", 40.7503, -73.988, { website: "https://shakeshack.com/location/herald-square", address: "1333 Broadway, New York, NY 10018" }),
-  ss_gc: P("ss_gc", "Shake Shack Grand Central", 40.7527, -73.9772, { website: "https://shakeshack.com/location/grand-central", address: "87 E 42nd St, New York, NY 10017" }),
-  joes: P("joes", "Joe's Pizza Broadway", 40.7547, -73.987, { address: "1435 Broadway, New York, NY 10018", price: "PRICE_LEVEL_INEXPENSIVE", rating: 4.6, count: 21000 }),
-  lind: P("lind", "L'industrie Pizzeria", 40.7115, -73.958, { address: "254 S 2nd St, Brooklyn, NY 11211", city: "Brooklyn", rating: 4.7 }),
-  lucali: P("lucali", "Lucali", 40.6806, -74.0005, { address: "575 Henry St, Brooklyn, NY 11231", city: "Brooklyn", rating: 4.6, price: "PRICE_LEVEL_EXPENSIVE" }),
+  home: P("home", "350 5th Ave", 40.7484, -73.9857, { address: "350 5th Ave, New York, NY 10118, USA", type: "street_address", typeLabel: "Address" }),
+  tdn: P("tdn", "Tacos Del Norte", 40.7466, -73.8913, { address: "84-12 Roosevelt Ave, Queens, NY 11372", city: "Queens", price: "PRICE_LEVEL_INEXPENSIVE", type: "mexican_restaurant", typeLabel: "Mexican Restaurant" }),
+  ss_msp: P("ss_msp", "Shake Shack Madison Square Park", 40.7414, -73.9882, { website: "https://shakeshack.com/location/madison-square-park", address: "Madison Ave & E 23rd St, New York, NY 10010", type: "hamburger_restaurant", typeLabel: "Hamburger Restaurant" }),
+  ss_hs: P("ss_hs", "Shake Shack Herald Square", 40.7503, -73.988, { website: "https://shakeshack.com/location/herald-square", address: "1333 Broadway, New York, NY 10018", type: "hamburger_restaurant", typeLabel: "Hamburger Restaurant" }),
+  ss_gc: P("ss_gc", "Shake Shack Grand Central", 40.7527, -73.9772, { website: "https://shakeshack.com/location/grand-central", address: "87 E 42nd St, New York, NY 10017", type: "hamburger_restaurant", typeLabel: "Hamburger Restaurant" }),
+  joes: P("joes", "Joe's Pizza Broadway", 40.7547, -73.987, { address: "1435 Broadway, New York, NY 10018", price: "PRICE_LEVEL_INEXPENSIVE", rating: 4.6, count: 21000, type: "pizza_restaurant", typeLabel: "Pizza Restaurant" }),
+  lind: P("lind", "L'industrie Pizzeria", 40.7115, -73.958, { address: "254 S 2nd St, Brooklyn, NY 11211", city: "Brooklyn", rating: 4.7, type: "pizza_restaurant", typeLabel: "Pizza Restaurant" }),
+  lucali: P("lucali", "Lucali", 40.6806, -74.0005, { address: "575 Henry St, Brooklyn, NY 11231", city: "Brooklyn", rating: 4.6, price: "PRICE_LEVEL_EXPENSIVE", type: "pizza_restaurant", typeLabel: "Pizza Restaurant" }),
+  abs: P("abs", "Absolute Bagels", 40.8024, -73.9674, { address: "2788 Broadway, New York, NY 10025", type: "bagel_shop", typeLabel: "Bagel Shop", price: "PRICE_LEVEL_INEXPENSIVE" }),
+  tsujita: P("tsujita", "Tsujita LA Artisan Noodle", 34.0395, -118.4428, { address: "2057 Sawtelle Blvd, Los Angeles, CA 90025", city: "Los Angeles", type: "ramen_restaurant", typeLabel: "Ramen Restaurant" }),
+  gk: P("gk", "Grandma's Kitchen", 40.7306, -73.9866, { address: "10 E 14th St, New York, NY 10003", type: "american_restaurant", typeLabel: "American Restaurant" }),
 };
 
 const SEARCH = {
@@ -46,6 +52,28 @@ const SEARCH = {
   "Lucali": ["lucali"],
   "Lucali Brooklyn, NY": ["lucali"],
   "Lucali Carroll Gardens": ["lucali"],
+  // Names the rules find in captions, tags and handles
+  "tacosdelnorte": ["tdn"],
+  "Shake Shack Madison Square Park": ["ss_msp"],
+  "Joe's Pizza Broadway": ["joes"],
+  "L'industrie": ["lind"],
+  "L'industrie Williamsburg": ["lind"],
+  "Absolute Bagels": ["abs"],
+  "Absolute Bagels UWS": ["abs"],
+  "Tsujita LA": ["tsujita"],
+  "Tsujita LA Los Angeles, CA": ["tsujita"],
+};
+
+// What Apify's Instagram Scraper returns for each test reel, by shortcode.
+const REELS = {
+  TACOS1: { ownerUsername: "nycfoodie", ownerFullName: "NYC Foodie", caption: "The best birria tacos in Queens 🌮 @tacosdelnorte get the consomé", locationName: "" },
+  SHACK1: { ownerUsername: "burgerhunter", caption: "Shake Shack still hits after a long day. ShackBurger + fries", locationName: "Shake Shack Madison Square Park" },
+  PIZZA1: {
+    ownerUsername: "sliceguide",
+    caption: "My top 3 pizza spots in NYC right now\n1. Joe's Pizza 📍 Broadway\n2. L'industrie 📍 Williamsburg\n3. Secret Supper Club 📍 ask me for the address",
+    locationName: "",
+  },
+  MYSTERY: { ownerUsername: "randomeats", caption: "Unreal dinner last night 🤤", locationName: "" },
 };
 
 const venue = (name, category, city, extra = {}) => ({
@@ -66,6 +94,9 @@ const venue = (name, category, city, extra = {}) => ({
 function decide(text, hasImage) {
   const t = text.toLowerCase();
   if (hasImage || t.includes("lucali")) return { places: [venue("Lucali", "Pizza", "Brooklyn, NY", { cuisine: "Thin-crust pizza", summary: "Candlelit pies and calzones worth the wait.", dishes: ["Plain pie", "Calzone"] })], reason: "" };
+  if (t.includes("absolute bagels")) return { places: [venue("Absolute Bagels", "Bakery & Desserts", "New York, NY", { cuisine: "Bagels" })], reason: "" };
+  if (t.includes("tsujita")) return { places: [venue("Tsujita LA", "Ramen & Noodles", "Los Angeles, CA", { cuisine: "Tsukemen" })], reason: "" };
+  if (t.includes("grandma")) return { places: [venue("Grandma's Kitchen Pop-up", "Other", "", {})], reason: "" };
   if (t.includes("mystery")) return { places: [], reason: "The caption only shows a plate of food with no venue name, tag or location." };
   if (t.includes("tacosdelnorte") || t.includes("tacos del norte")) {
     return { places: [venue("Tacos Del Norte", "Tacos & Mexican", "Queens, NY", { cuisine: "Birria tacos", summary: "Rich birria tacos with consomé for dipping.", dishes: ["Birria tacos", "Consomé", "Quesabirria"] })], reason: "" };
@@ -113,6 +144,22 @@ const server = createServer(async (req, res) => {
       stop_details: null,
       usage: { input_tokens: 500, output_tokens: 120 },
     });
+  }
+
+  if (req.method === "POST" && url.pathname === "/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items") {
+    if (req.headers.authorization !== "Bearer test-apify") return send(res, 401, { error: { type: "token-not-valid" } });
+    const body = JSON.parse(raw);
+    const code = (body.directUrls?.[0] || "").match(/\/(?:reel|p)\/([A-Za-z0-9_-]+)/)?.[1] || "";
+    const reel = REELS[code.replace(/\d+$/, "") === "MYSTERY" ? "MYSTERY" : code];
+    console.log(`[apify] ${body.directUrls?.[0]} -> ${reel ? code : "none"}`);
+    return send(res, 200, reel ? [{ url: body.directUrls[0], shortCode: code, displayUrl: `https://example.com/${code}.jpg`, ...reel }] : []);
+  }
+
+  if (req.method === "GET" && url.pathname === "/blog/ramen") {
+    res.writeHead(200, { "Content-Type": "text/html" });
+    return res.end(
+      '<html><head><meta property="og:title" content="Best ramen in LA"><meta property="og:description" content="📍 Tsujita LA, Sawtelle — the tsukemen is unreal"></head></html>',
+    );
   }
 
   if (req.method === "POST" && url.pathname === "/v1/places:searchText") {
