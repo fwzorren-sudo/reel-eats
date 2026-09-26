@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Reel Eats</title>
+  <meta name="description" content="Restaurants you saved from Instagram, on a map, with the branch closest to home." />
+  <meta name="theme-color" content="#f7f4f6" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#151114" media="(prefers-color-scheme: dark)" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Reel Eats" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icons/icon-192.png" type="image/png" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app" id="app">
+    <header class="topbar">
+      <div class="topbar-row">
+        <h1 class="brand">Reel<span>Eats</span></h1>
+        <div class="tally num" id="tally"></div>
+      </div>
+      <div class="filters">
+        <div class="segmented" role="group" aria-label="Show">
+          <button type="button" data-status="want" aria-pressed="true">To try</button>
+          <button type="button" data-status="visited" aria-pressed="false">Visited</button>
+          <button type="button" data-status="all" aria-pressed="false">All</button>
+        </div>
+        <select class="select-chip" id="category-filter" aria-label="Category">
+          <option value="">All categories</option>
+        </select>
+      </div>
+    </header>
+
+    <main>
+      <section class="view" id="view-map" aria-label="Map">
+        <div id="map"></div>
+        <div class="map-tools">
+          <button class="round-btn" type="button" id="fit-btn" aria-label="Show all places">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+          </button>
+          <button class="round-btn" type="button" id="home-btn" aria-label="Center on home">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg>
+          </button>
+        </div>
+        <div class="map-card" id="map-card" hidden></div>
+      </section>
+
+      <section class="view padded" id="view-list" aria-label="List" hidden>
+        <div class="list-tools">
+          <input class="search" type="search" id="search" placeholder="Search name, dish, city" aria-label="Search" />
+          <select class="select-chip" id="sort" aria-label="Sort">
+            <option value="home">Nearest home</option>
+            <option value="me">Nearest me</option>
+            <option value="new">Newest</option>
+            <option value="name">A to Z</option>
+          </select>
+        </div>
+        <div id="list"></div>
+      </section>
+
+      <section class="view padded" id="view-cats" aria-label="Categories" hidden>
+        <div id="cats"></div>
+      </section>
+
+      <section class="view padded" id="view-settings" aria-label="Settings" hidden>
+        <div class="stack" id="settings"></div>
+      </section>
+    </main>
+
+    <button class="fab" type="button" id="add-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      Add
+    </button>
+
+    <nav class="tabbar" aria-label="Views">
+      <button type="button" data-view="map" aria-current="page">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/></svg>
+        Map
+      </button>
+      <button type="button" data-view="list">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/></svg>
+        List
+      </button>
+      <button type="button" data-view="cats">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg>
+        Categories
+      </button>
+      <button type="button" data-view="settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg>
+        Settings
+      </button>
+    </nav>
+  </div>
+
+  <div class="backdrop" id="backdrop" hidden></div>
+  <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" hidden></div>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <div class="login" id="login" hidden>
+    <form class="login-card" id="login-form">
+      <h1 class="brand">Reel<span>Eats</span></h1>
+      <p>Restaurants from your reels, on one map, with the branch closest to home.</p>
+      <label>Access code
+        <input type="password" id="login-code" autocomplete="current-password" required />
+        <span class="hint">The APP_TOKEN you set when you deployed. It's stored on this phone only.</span>
+      </label>
+      <div class="error-text" id="login-error" hidden></div>
+      <button class="btn primary" type="submit">Open my list</button>
+    </form>
+  </div>
+
+  <script src="/vendor/leaflet/leaflet.js"></script>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
