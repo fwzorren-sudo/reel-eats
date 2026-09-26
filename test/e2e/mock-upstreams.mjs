@@ -1,5 +1,6 @@
 // Stand-ins for the Anthropic API, Google Places and a reel page, for local end-to-end runs.
 // Usage: node test/e2e/mock-upstreams.mjs [port]
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 
 const port = Number(process.argv[2] || 8799);
@@ -36,6 +37,9 @@ const PLACES = {
   lucali: P("lucali", "Lucali", 40.6806, -74.0005, { address: "575 Henry St, Brooklyn, NY 11231", city: "Brooklyn", rating: 4.6, price: "PRICE_LEVEL_EXPENSIVE", type: "pizza_restaurant", typeLabel: "Pizza Restaurant" }),
   abs: P("abs", "Absolute Bagels", 40.8024, -73.9674, { address: "2788 Broadway, New York, NY 10025", type: "bagel_shop", typeLabel: "Bagel Shop", price: "PRICE_LEVEL_INEXPENSIVE" }),
   tsujita: P("tsujita", "Tsujita LA Artisan Noodle", 34.0395, -118.4428, { address: "2057 Sawtelle Blvd, Los Angeles, CA 90025", city: "Los Angeles", type: "ramen_restaurant", typeLabel: "Ramen Restaurant" }),
+  // Rosetta Bakery branch coordinates are made up; the reel caption is a real Apify result.
+  rb_high: P("rb_high", "Rosetta Bakery", 33.9296, -84.344, { address: "120 High St, Dunwoody, GA 30346", city: "Dunwoody", website: "https://www.rosettabakery.com/", type: "bakery", typeLabel: "Bakery" }),
+  rb_west: P("rb_west", "Rosetta Bakery", 33.787, -84.412, { address: "1100 Howell Mill Rd, Atlanta, GA 30318", city: "Atlanta", website: "https://www.rosettabakery.com/", type: "bakery", typeLabel: "Bakery" }),
   gk: P("gk", "Grandma's Kitchen", 40.7306, -73.9866, { address: "10 E 14th St, New York, NY 10003", type: "american_restaurant", typeLabel: "American Restaurant" }),
 };
 
@@ -62,7 +66,13 @@ const SEARCH = {
   "Absolute Bagels UWS": ["abs"],
   "Tsujita LA": ["tsujita"],
   "Tsujita LA Los Angeles, CA": ["tsujita"],
+  "Rosetta Bakery": ["rb_west", "rb_high"],
+  "Rosetta Bakery 120 High Street, Dunwoody, GA": ["rb_high"],
+  "Rosetta Bakery Dunwoody, GA": ["rb_high"],
 };
+
+// A real result from Apify, used as-is.
+const ROSETTA = JSON.parse(readFileSync(new URL("../fixtures/apify-rosetta.json", import.meta.url), "utf8"))[0];
 
 // What Apify's Instagram Scraper returns for each test reel, by shortcode.
 const REELS = {
@@ -94,6 +104,7 @@ const venue = (name, category, city, extra = {}) => ({
 function decide(text, hasImage) {
   const t = text.toLowerCase();
   if (hasImage || t.includes("lucali")) return { places: [venue("Lucali", "Pizza", "Brooklyn, NY", { cuisine: "Thin-crust pizza", summary: "Candlelit pies and calzones worth the wait.", dishes: ["Plain pie", "Calzone"] })], reason: "" };
+  if (t.includes("rosetta bakery")) return { places: [venue("Rosetta Bakery", "Bakery & Desserts", "Dunwoody, GA", { cuisine: "Italian bakery", multi: true })], reason: "" };
   if (t.includes("absolute bagels")) return { places: [venue("Absolute Bagels", "Bakery & Desserts", "New York, NY", { cuisine: "Bagels" })], reason: "" };
   if (t.includes("tsujita")) return { places: [venue("Tsujita LA", "Ramen & Noodles", "Los Angeles, CA", { cuisine: "Tsukemen" })], reason: "" };
   if (t.includes("grandma")) return { places: [venue("Grandma's Kitchen Pop-up", "Other", "", {})], reason: "" };
@@ -150,7 +161,7 @@ const server = createServer(async (req, res) => {
     if (req.headers.authorization !== "Bearer test-apify") return send(res, 401, { error: { type: "token-not-valid" } });
     const body = JSON.parse(raw);
     const code = (body.directUrls?.[0] || "").match(/\/(?:reel|p)\/([A-Za-z0-9_-]+)/)?.[1] || "";
-    const reel = REELS[code.replace(/\d+$/, "") === "MYSTERY" ? "MYSTERY" : code];
+    const reel = code === "DdmxY_iRYKE" ? ROSETTA : REELS[code.replace(/\d+$/, "") === "MYSTERY" ? "MYSTERY" : code];
     console.log(`[apify] ${body.directUrls?.[0]} -> ${reel ? code : "none"}`);
     return send(res, 200, reel ? [{ url: body.directUrls[0], shortCode: code, displayUrl: `https://example.com/${code}.jpg`, ...reel }] : []);
   }

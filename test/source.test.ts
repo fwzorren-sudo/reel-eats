@@ -6,8 +6,10 @@ import {
   extractMentions,
   fetchSourceMeta,
   instagramParts,
+  apifyInput,
   mapApifyItem,
   parseInstagramEmbed,
+  pickApifyItem,
   parseOpenGraph,
 } from "../src/source";
 
@@ -106,7 +108,7 @@ describe("Apify", () => {
     });
     const m = await fetchSourceMeta("https://www.instagram.com/reels/ABC/?igsh=x", env);
     expect(m.via).toBe("apify");
-    expect(seen!.url).toBe("https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?timeout=120&maxItems=1");
+    expect(seen!.url).toBe("https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?timeout=120&maxItems=3");
     expect(new Headers(seen!.init.headers).get("authorization")).toBe("Bearer apify-test");
     expect(JSON.parse(String(seen!.init.body))).toMatchObject({ directUrls: ["https://www.instagram.com/reel/ABC/"], resultsType: "posts", resultsLimit: 1 });
   });
@@ -128,5 +130,32 @@ describe("Apify", () => {
 describe("extractMentions", () => {
   it("finds handles but not emails", () => {
     expect(extractMentions("Go to @Joes.Pizza. and @l_industrie! mail me@example.com")).toEqual(["joes.pizza", "l_industrie"]);
+  });
+});
+
+describe("a real Apify result", () => {
+  const items = JSON.parse(fixture("apify-rosetta.json"));
+  const shared = "https://www.instagram.com/reel/DdmxY_iRYKE/";
+
+  it("is accepted for the reel that was shared, even though Apify links it as /p/", () => {
+    expect(pickApifyItem(items, shared)).toBe(items[0]);
+  });
+
+  it("is rejected when a scraper returns a different reel", () => {
+    expect(pickApifyItem(items, "https://www.instagram.com/reel/SOMETHINGELSE/")).toBeNull();
+  });
+
+  it("maps the caption, poster and mentions", () => {
+    const m = mapApifyItem(shared, items[0]);
+    expect(m.author).toBe("atlfoodiesofficial");
+    expect(m.authorFullName).toBe("Atlanta Food & Lifestyle Influencers | Adam & Cole");
+    expect(m.mentions).toEqual(["rosettabakery", "highstreetatl"]);
+    expect(m.locationName).toBe("");
+    expect(m.caption).toContain("📍 Rosetta Bakery - 120 High Street, Dunwoody, GA");
+  });
+
+  it("sends Apify's Reel Scraper the input it expects", () => {
+    expect(apifyInput("apify~instagram-reel-scraper", shared)).toMatchObject({ username: [shared], resultsLimit: 1 });
+    expect(apifyInput("apify~instagram-scraper", shared)).toMatchObject({ directUrls: [shared], resultsType: "posts" });
   });
 });

@@ -103,6 +103,15 @@ assert.equal(r.data.places[0].google_place_id, "tsujita");
 assert.equal(r.data.places[0].category, "Ramen & Noodles");
 step("works with links from other sites");
 
+r = await share({ url: IG("DdmxY_iRYKE") });
+assert.equal(r.data.status, "done", JSON.stringify(r.data));
+p = r.data.places[0];
+assert.equal(p.name, "Rosetta Bakery");
+assert.equal(p.category, "Bakery & Desserts");
+assert.equal(p.branch_count, 2);
+assert.equal(p.source_author, "atlfoodiesofficial");
+step("saves the Rosetta Bakery reel from a real Apify result");
+
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 r = await call("/api/share", { method: "POST", body: { image_base64: png, image_type: "image/png" } });
 if (MODE === "claude") {
@@ -142,7 +151,7 @@ step("keeps a typed name even when Google can't find it");
 
 r = await call("/api/state");
 let places = r.data.places;
-assert.equal(places.length, MODE === "claude" ? 9 : 8, places.map((x) => x.name).join(", "));
+assert.equal(places.length, MODE === "claude" ? 10 : 9, places.map((x) => x.name).join(", "));
 const lucali = byGoogle(places, "lucali");
 r = await call(`/api/places/${lucali.id}`, { method: "PATCH", body: { visit_status: "visited", my_rating: 5, notes: "Bring cash" } });
 assert.equal(r.data.place.visit_status, "visited");

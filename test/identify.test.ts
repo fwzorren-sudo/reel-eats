@@ -1,6 +1,7 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { captionSummary, handleToName, noteCandidate, pinnedPlaces, ruleCandidates } from "../src/identify";
-import { emptyMeta } from "../src/source";
+import { emptyMeta, mapApifyItem } from "../src/source";
 import type { SourceMeta } from "../src/types";
 
 const meta = (m: Partial<SourceMeta>): SourceMeta => ({ ...emptyMeta("https://www.instagram.com/reel/X/"), ...m });
@@ -80,5 +81,30 @@ describe("helpers", () => {
   it("summarises the caption without tags", () => {
     expect(captionSummary("The best birria in Queens 🌮 @tacosdelnorte. Get the consomé!\n#nyc")).toBe("The best birria in Queens 🌮.");
     expect(captionSummary("📍 Lucali\nThin, crisp and worth the line")).toBe("Thin, crisp and worth the line");
+  });
+});
+
+describe("a real reel caption from Apify", () => {
+  const [item] = JSON.parse(readFileSync(new URL("./fixtures/apify-rosetta.json", import.meta.url), "utf8"));
+  const meta = mapApifyItem("https://www.instagram.com/reel/DdmxY_iRYKE/", item);
+
+  it("takes the venue and address from the 📍 line and skips the 📌 save-this line", () => {
+    const r = ruleCandidates(meta, null);
+    expect(r.primary).toHaveLength(1);
+    expect(r.primary[0]).toMatchObject({ name: "Rosetta Bakery", address_hint: "120 High Street, Dunwoody, GA" });
+  });
+
+  it("keeps the @mentions as a backup, ahead of the food blogger who posted it", () => {
+    expect(ruleCandidates(meta, null).fallback.map((c) => c.instagram_handle)).toEqual(["rosettabakery", "highstreetatl", "atlfoodiesofficial"]);
+  });
+
+  it("summarises the post", () => {
+    expect(captionSummary(meta.caption)).toBe("pov: you find the BEST Italian Bakery in Atlanta!");
+  });
+});
+
+describe("calls to action", () => {
+  it.each(["📌 Save this for your next date night", "📌 SHARE with a friend", "📍 Follow @eats for more", "📌 Tag someone"])("ignores %s", (line) => {
+    expect(pinnedPlaces(line)).toEqual([]);
   });
 });

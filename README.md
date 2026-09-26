@@ -139,7 +139,7 @@ These live under `vars` in `wrangler.jsonc`. Redeploy after editing.
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `AI_MODEL` | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | Workers AI model that reads captions. Set it to `off` to use only pins, tags and mentions. |
-| `APIFY_ACTOR` | `apify~instagram-scraper` | Apify actor that reads the reel. Add it under `vars` only if you want a different actor. |
+| `APIFY_ACTOR` | `apify~instagram-scraper` | Apify actor that reads the reel. `apify~instagram-reel-scraper` also works. Add it under `vars` only to change it. Results for a different reel than the one shared are ignored. |
 
 ### Optional: use Claude instead
 

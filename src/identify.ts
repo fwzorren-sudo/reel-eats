@@ -52,6 +52,8 @@ function splitNameAndPlace(text: string): { name: string; where: string } {
 const looksLikeName = (s: string) => /\p{L}.*\p{L}/u.test(s) && s.length <= 60 && s.split(/\s+/).length <= 8;
 
 const PIN = /📍|📌|\b(?:location|address|where|spot)\s*:/iu;
+/** "📌 SAVE this for later", "📌 Follow @x": creators use pins for calls to action too. */
+const CALL_TO_ACTION = /^(save|share|follow|tag|comment|like|dm|send|click|tap|link|subscribe|turn on|don'?t forget)\b/i;
 
 /**
  * Food creators mark venues with a pin: "📍Tacos Del Norte, Queens" or
@@ -64,6 +66,7 @@ export function pinnedPlaces(caption: string): { name: string; where: string }[]
     if (!m || m.index === undefined) continue;
     const before = tidy(line.slice(0, m.index));
     const after = tidy(line.slice(m.index + m[0].length));
+    if (!before && CALL_TO_ACTION.test(after)) continue;
     let entry: { name: string; where: string };
     if (looksLikeName(before) && !/\b(location|address|where)\b/i.test(before)) entry = { name: before, where: after };
     else entry = splitNameAndPlace(after);

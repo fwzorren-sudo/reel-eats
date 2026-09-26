@@ -170,16 +170,25 @@ export function parseOpenGraph(html: string): Parsed {
 /* ---------- Apify ---------- */
 
 interface ApifyItem {
+  url?: string;
+  inputUrl?: string;
+  shortCode?: string;
+  shortcode?: string;
   caption?: string;
+  caption_text?: string;
   text?: string;
   ownerUsername?: string;
+  owner_username?: string;
   ownerFullName?: string;
+  owner_full_name?: string;
   owner?: { username?: string; fullName?: string; full_name?: string };
   locationName?: string;
+  location_name?: string;
   location?: { name?: string } | null;
   mentions?: string[];
   hashtags?: string[];
   taggedUsers?: { username?: string; full_name?: string; fullName?: string }[];
+  tagged_users?: { username?: string; full_name?: string; fullName?: string }[];
   coauthorProducers?: { username?: string; full_name?: string; fullName?: string }[];
   displayUrl?: string;
   error?: string;
@@ -187,18 +196,18 @@ interface ApifyItem {
 }
 
 export function mapApifyItem(url: string, item: ApifyItem): SourceMeta {
-  const people = [...(item.taggedUsers ?? []), ...(item.coauthorProducers ?? [])];
+  const people = [...(item.taggedUsers ?? item.tagged_users ?? []), ...(item.coauthorProducers ?? [])];
   const tagged = people
     .filter((u) => u.username)
     .map((u) => ({ username: u.username!.toLowerCase(), fullName: (u.full_name || u.fullName || "").trim() }));
-  const author = item.ownerUsername || item.owner?.username || "";
+  const author = item.ownerUsername || item.owner_username || item.owner?.username || "";
   return finish(
     url,
     {
       author,
-      authorFullName: item.ownerFullName || item.owner?.fullName || item.owner?.full_name || "",
-      caption: (item.caption || item.text || "").slice(0, 4000),
-      locationName: item.locationName || item.location?.name || "",
+      authorFullName: item.ownerFullName || item.owner_full_name || item.owner?.fullName || item.owner?.full_name || "",
+      caption: (item.caption || item.caption_text || item.text || "").slice(0, 4000),
+      locationName: item.locationName || item.location_name || item.location?.name || "",
       thumbnail: item.displayUrl || "",
     },
     "apify",
@@ -206,23 +215,45 @@ export function mapApifyItem(url: string, item: ApifyItem): SourceMeta {
   );
 }
 
-/** Run Apify's Instagram Scraper on one reel and wait for the result. */
+/**
+ * Some scrapers treat a link as "this account" and return its newest reel instead.
+ * Only accept a result that is the reel that was shared, when the result says which one it is.
+ */
+export function pickApifyItem(items: unknown, url: string): ApifyItem | null {
+  if (!Array.isArray(items)) return null;
+  const code = instagramParts(url)?.code;
+  const usable = (items as ApifyItem[]).filter((i) => i && !i.error);
+  const codeOf = (i: ApifyItem) =>
+    i.shortCode || i.shortcode || instagramParts(i.url ?? "")?.code || instagramParts(i.inputUrl ?? "")?.code || "";
+  const match = usable.find((i) => code && codeOf(i) === code);
+  if (match) return match;
+  const unlabeled = usable.find((i) => !codeOf(i));
+  return unlabeled ?? null;
+}
+
+export function apifyInput(actor: string, url: string): Record<string, unknown> {
+  // Apify's Reel Scraper takes `username`; the Instagram Scraper and most others take `directUrls`.
+  if (/reel-scraper/i.test(actor)) return { username: [url], directUrls: [url], resultsLimit: 1 };
+  return { directUrls: [url], resultsType: "posts", resultsLimit: 1, addParentData: false };
+}
+
+/** Run an Apify Instagram scraper on one reel and wait for the result. */
 export async function fetchViaApify(env: Env, url: string): Promise<SourceMeta | null> {
   const base = env.APIFY_BASE_URL || "https://api.apify.com";
-  const actor = env.APIFY_ACTOR || "apify~instagram-scraper";
+  const actor = (env.APIFY_ACTOR || "apify~instagram-scraper").replace("/", "~");
   try {
-    const res = await fetch(`${base}/v2/acts/${actor}/run-sync-get-dataset-items?timeout=120&maxItems=1`, {
+    const res = await fetch(`${base}/v2/acts/${actor}/run-sync-get-dataset-items?timeout=120&maxItems=3`, {
       method: "POST",
       headers: { Authorization: `Bearer ${env.APIFY_TOKEN}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ directUrls: [url], resultsType: "posts", resultsLimit: 1, addParentData: false }),
+      body: JSON.stringify(apifyInput(actor, url)),
       signal: AbortSignal.timeout(130_000),
     });
     if (!res.ok) {
       console.warn(`Apify returned ${res.status}: ${(await res.text()).slice(0, 300)}`);
       return null;
     }
-    const items = (await res.json()) as ApifyItem[];
-    const item = Array.isArray(items) ? items.find((i) => !i.error) : null;
+    const item = pickApifyItem(await res.json(), url);
+    if (!item) console.warn(`Apify didn't return ${url}; falling back to Instagram's page`);
     return item ? mapApifyItem(url, item) : null;
   } catch (err) {
     console.warn("Apify request failed", err);

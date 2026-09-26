@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { brandQuery, categoryFor, cuisineFor, guessCategory, isFoodPlace, PlacesClient, resolveBranch, toCandidate } from "../src/places";
 import { businessName } from "../src/pipeline";
+import { ruleCandidates } from "../src/identify";
+import { mapApifyItem } from "../src/source";
+import { readFileSync } from "node:fs";
 import type { ExtractedPlace, Home } from "../src/types";
 
 const HOME_JC: Home = { address: "Jersey City, NJ", lat: 40.7178, lng: -74.0431 };
@@ -188,5 +191,38 @@ describe("food filtering, categories and chains", () => {
     expect(businessName(b("Joe's Pizza Broadway"), [b("Joe's Pizza Broadway")])).toBe("Joe's Pizza Broadway");
     expect(brandQuery("Shake Shack Madison Square Park")).toBe("Shake Shack");
     expect(brandQuery("Lucali")).toBe("");
+  });
+});
+
+describe("the Rosetta Bakery reel from Apify", () => {
+  // Branch coordinates are made up for the test. Only the caption is real.
+  const client = new PlacesClient("test-key");
+  const site = { websiteUri: "https://www.rosettabakery.com/" };
+  const highStreet = raw("rb_high", "Rosetta Bakery", 33.9296, -84.344, { ...site, primaryType: "bakery", types: ["bakery", "cafe", "food"] });
+  const westside = raw("rb_west", "Rosetta Bakery", 33.787, -84.412, { ...site, primaryType: "bakery", types: ["bakery", "cafe", "food"] });
+  const [item] = JSON.parse(readFileSync(new URL("./fixtures/apify-rosetta.json", import.meta.url), "utf8"));
+  const pin = ruleCandidates(mapApifyItem("https://www.instagram.com/reel/DdmxY_iRYKE/", item), null).primary[0];
+
+  function google() {
+    return mockGoogle({
+      "Rosetta Bakery": [westside, highStreet],
+      "Rosetta Bakery 120 High Street, Dunwoody, GA": [highStreet],
+    });
+  }
+
+  it("saves the Westside branch for a home in Midtown", async () => {
+    google();
+    const res = await resolveBranch(client, pin, { address: "Midtown Atlanta", lat: 33.7812, lng: -84.3838 });
+    expect(res?.best.id).toBe("rb_west");
+    expect(res?.branches.map((b) => b.id)).toEqual(["rb_west", "rb_high"]);
+    expect(categoryFor(res!.best)).toBe("Bakery & Desserts");
+    expect(businessName(res!.best, res!.branches)).toBe("Rosetta Bakery");
+  });
+
+  it("saves the High Street branch the reel filmed for a home in Sandy Springs", async () => {
+    const calls = google();
+    const res = await resolveBranch(client, pin, { address: "Sandy Springs", lat: 33.9304, lng: -84.3733 });
+    expect(res?.best.id).toBe("rb_high");
+    expect(calls.map((c) => c.textQuery)).toEqual(["Rosetta Bakery", "Rosetta Bakery 120 High Street, Dunwoody, GA"]);
   });
 });
