@@ -279,6 +279,27 @@ await call(`/api/links/${token}`, { method: "DELETE" });
 assert.equal((await fetch(`${BASE}/api/public/${token}`)).status, 404);
 step("shares a read-only list without notes, home or distances, and turns the link off");
 
+/* ----- archiving ----- */
+r = await call(`/api/places/${lucali.id}`, { method: "PATCH", body: { archived: true, archive_reason: "too-far" } });
+assert.equal(r.status, 200, JSON.stringify(r.data));
+assert.ok(r.data.place.archived_at > 0);
+assert.equal(r.data.place.archive_reason, "too-far");
+assert.equal(r.data.place.visit_status, "visited", "archiving keeps the visit");
+assert.equal(r.data.place.my_rating, 5, "and the rating");
+const lucaliRefreshed = r.data.place.refreshed_at;
+r = await call(`/api/places/${lucali.id}`, { method: "PATCH", body: { archived: true, archive_reason: "meh" } });
+assert.equal(r.status, 400);
+r = await share({ note: "Lucali" });
+assert.equal(r.data.status, "done", JSON.stringify(r.data));
+assert.equal(r.data.places.length, 0, "an archived place isn't saved again");
+assert.match(r.data.message, /Already on your list: Lucali \(archived\)\./);
+r = await call("/api/links", { method: "POST", body: { status: "all", category: "Pizza" } });
+pub = await fetch(`${BASE}/api/public/${r.data.link.token}`).then((x) => x.json());
+assert.ok(pub.places.length >= 2);
+assert.ok(!pub.places.some((x) => x.name === "Lucali"), "archived places stay out of shared links");
+await call(`/api/links/${r.data.link.token}`, { method: "DELETE" });
+step("archives a place: keeps its rating, isn't saved again, stays out of shared links");
+
 /* ----- upkeep ----- */
 r = await call("/api/maintenance/refresh", { method: "POST", body: { all: true } });
 assert.equal(r.status, 200, JSON.stringify(r.data));
@@ -289,6 +310,13 @@ r = await call("/api/state");
 assert.equal(byGoogle(r.data.places, "abs").business_status, "CLOSED_PERMANENTLY");
 assert.equal(r.data.apify.limit, 5);
 assert.ok(byGoogle(r.data.places, "tdn").refreshed_at > Date.now() - 60000);
+assert.equal(byGoogle(r.data.places, "lucali").refreshed_at, lucaliRefreshed, "archived places aren't re-checked");
 step("re-checks places with Google, spots a permanent closure, and checks Apify credit");
+
+r = await call(`/api/places/${lucali.id}`, { method: "PATCH", body: { archived: false, archive_reason: "other" } });
+assert.equal(r.data.place.archived_at, null);
+assert.equal(r.data.place.archive_reason, null);
+assert.equal(r.data.place.visit_status, "visited");
+step("unarchives a place");
 
 console.log(`\nAll end-to-end checks passed (${MODE}).`);

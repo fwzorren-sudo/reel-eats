@@ -57,7 +57,9 @@ export function summarize(
   const parts: string[] = [];
   if (places.length === 1) parts.push(`Saved ${describe(places[0])}.`);
   else if (places.length > 1) parts.push(`Saved ${places.length} places: ${places.map((p) => p.name).join(", ")}.`);
-  if (duplicates.length) parts.push(`Already on your list: ${duplicates.map((p) => p.name).join(", ")}.`);
+  if (duplicates.length) {
+    parts.push(`Already on your list: ${duplicates.map((p) => (p.archived_at ? `${p.name} (archived)` : p.name)).join(", ")}.`);
+  }
   const more = duplicates.filter((p) => (creators[p.id] ?? 0) > 1);
   if (more.length === 1) parts.push(`Added this reel to it. ${creators[more[0].id]} creators have recommended it now.`);
   else if (more.length > 1) parts.push("Added this reel to each of them.");

@@ -33,8 +33,10 @@ import { canonicalUrl, extractFirstUrl } from "./source";
 import { cleanTags } from "./tags";
 import { backfillPhotos, checkApifyUsage, DAILY_CRON, refreshPlaces, runDailyUpkeep } from "./upkeep";
 import {
+  ARCHIVE_REASONS,
   CATEGORIES,
   type ApifyUsage,
+  type ArchiveReason,
   type Env,
   type Home,
   type PlaceCandidate,
@@ -294,6 +296,13 @@ async function patchPlace(env: Env, place: PlaceRow, body: Record<string, unknow
     if (!Array.isArray(body.tags)) throw new HttpError(400, "Tags must be a list.");
     f.tags = JSON.stringify(cleanTags(body.tags));
   }
+  if (body.archived !== undefined) {
+    if (typeof body.archived !== "boolean") throw new HttpError(400, "archived must be true or false.");
+    const reason = body.archive_reason ?? null;
+    if (reason !== null && !(ARCHIVE_REASONS as readonly unknown[]).includes(reason)) throw new HttpError(400, "Unknown archive reason.");
+    f.archived_at = body.archived ? place.archived_at ?? Date.now() : null;
+    f.archive_reason = body.archived ? (reason as ArchiveReason | null) : null;
+  }
   if (body.visit_status !== undefined) {
     if (body.visit_status !== "want" && body.visit_status !== "visited") throw new HttpError(400, "Bad visit status.");
     f.visit_status = body.visit_status;
@@ -369,6 +378,7 @@ const publicSource = (s: SourceRow) => ({
 });
 
 function inScope(p: PlaceRow, scope: ShareLinkScope): boolean {
+  if (p.archived_at) return false;
   return (scope.status === "all" || p.visit_status === scope.status) && (!scope.category || p.category === scope.category);
 }
 

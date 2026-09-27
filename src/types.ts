@@ -270,7 +270,12 @@ export interface PlaceRow {
   photo_key: string | null;
   added_by: string | null;
   refreshed_at: number | null;
+  archived_at: number | null;
+  archive_reason: ArchiveReason | null;
 }
+
+export const ARCHIVE_REASONS = ["not-for-me", "closed", "too-far", "other"] as const;
+export type ArchiveReason = (typeof ARCHIVE_REASONS)[number];
 
 export interface SourceRow {
   id: string;

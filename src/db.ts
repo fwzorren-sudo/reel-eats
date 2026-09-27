@@ -282,11 +282,11 @@ export async function getShareLink(db: D1Database, token: string): Promise<Share
 
 /* ---------- upkeep ---------- */
 
-/** Located places whose Google details are oldest, for the daily refresh. */
+/** Located places whose Google details are oldest, for the daily refresh. Archived places are skipped. */
 export async function placesDueForRefresh(db: D1Database, olderThan: number, limit: number): Promise<PlaceRow[]> {
   const { results } = await db
     .prepare(
-      `SELECT * FROM places WHERE located = 1 AND google_place_id IS NOT NULL AND coalesce(refreshed_at, 0) < ?
+      `SELECT * FROM places WHERE located = 1 AND google_place_id IS NOT NULL AND archived_at IS NULL AND coalesce(refreshed_at, 0) < ?
        ORDER BY coalesce(refreshed_at, 0), created_at LIMIT ?`,
     )
     .bind(olderThan, limit)

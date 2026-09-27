@@ -456,6 +456,32 @@ button.pill { border: 0; cursor: pointer; }
 .empty h2 { margin: 0; font: 700 19px/1.2 var(--display); }
 .empty p { margin: 0; color: var(--muted); max-width: 42ch; }
 
+.archived-row {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px dashed var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 14px;
+}
+.archived-help { margin: -2px 2px 12px; }
+.archived-banner {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.archive-reasons { display: grid; gap: 8px; padding: 12px; border-radius: 12px; background: var(--surface-2); }
+
 /* ---------- Browse ---------- */
 .browse-switch { margin-bottom: 16px; }
 .cat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }

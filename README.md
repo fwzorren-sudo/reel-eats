@@ -21,7 +21,7 @@ Each place opens a detail card:
 - occasion tags and a "go soon" note when the reel says it just opened, is a pop-up, or has something for a limited time
 - links to book a table on OpenTable or Resy
 
-You can mark a place visited, rate it, add notes, edit its tags, pick a different branch, or fix a wrong match.
+You can mark a place visited, rate it, add notes, edit its tags, pick a different branch, fix a wrong match, or archive it.
 
 ## How it works
 
@@ -147,8 +147,9 @@ Install the app from Chrome as in setup step 7. After that, **Reel Eats** appear
 - **Nearest branch**: the detail card says "Closest of 3 locations found". Open **All 3 locations** to switch to another branch.
 - **Wrong match**: open **Wrong place?** on the detail card, search Google Maps, and pick the right result.
 - **Tags**: open **Edit details** on a place to add or remove occasions, or change the "go soon" note.
+- **Archive**: for places you've decided against, that closed, or that are too far. Tap **Archive** on a place and optionally pick a reason: Not for me, Closed, Too far or Other. Archived places leave the map, the list, Browse, shared links and the monthly re-check, but keep their rating and notes. Sharing another reel of one doesn't save it again. They're under **Archived** at the bottom of the list, where **Unarchive** puts one back. **Delete** removes a place for good.
 - **Moving house**: save the new address in Settings. Distances update right away, and chains switch to the closest branch Reel Eats already knows about. Tap **Re-check nearest branches** to search again around the new home.
-- **Closures**: once a day the Worker re-checks places that haven't been checked for a month, updating hours, ratings and whether Google lists them as closed. A place that closed for good gets a red label, and the list shows a notice. **Refresh hours and closures** in Settings runs the check now.
+- **Closures**: once a day the Worker re-checks places that haven't been checked for a month, updating hours, ratings and whether Google lists them as closed. A place that closed for good gets a red label, and the list shows a notice with a button to archive it. **Refresh hours and closures** in Settings runs the check now.
 - **A partner's own code**: in Settings, under **Partner access**, type their name and tap **Make a code**. They sign in with that code, and it also works in their own iPhone Shortcut. What they save shows "Added by" with their name. They can't see or change partner codes or links. **Turn off** stops a code right away.
 - **Read-only links**: under **Share a read-only list**, pick To try, Visited or All, and optionally one category. Anyone with the link sees those places on a map and list, without your notes, your home address or distances. **Turn off** disables the link.
 - **Google My Maps**: **Google My Maps (KML)** in Settings downloads a file. In Google My Maps, create a map, tap **Import**, and pick it. Each pin has the category, status, tags, reel and Google Maps link, so My Maps can color pins by category.

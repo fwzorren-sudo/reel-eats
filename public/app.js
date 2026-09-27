@@ -54,6 +54,8 @@ const TAG_EMOJI = {
 };
 const TAGS = Object.keys(TAG_EMOJI);
 
+const ARCHIVE_REASONS = { "not-for-me": "Not for me", closed: "Closed", "too-far": "Too far", other: "Other" };
+
 const TOKEN_KEY = "reel-eats-token";
 const PREFS_KEY = "reel-eats-prefs";
 const BANNER_KEY = "reel-eats-banner";
@@ -85,6 +87,8 @@ const state = {
   features: { engine: "rules", screenshots: false, apify: false, transcripts: false },
   /** Set when viewing someone's read-only link. */
   guest: null,
+  /** The list shows archived places instead. */
+  archivedView: false,
 };
 
 /* ---------- small helpers ---------- */
@@ -209,6 +213,8 @@ function goSoonActive(p) {
 
 const cityOf = (p) => (p.city || p.city_hint || "").trim();
 const closedForGood = (p) => p.business_status === "CLOSED_PERMANENTLY";
+const isArchived = (p) => !!p.archived_at;
+const archiveLabel = (p) => `Archived${ARCHIVE_REASONS[p.archive_reason] ? ` · ${ARCHIVE_REASONS[p.archive_reason]}` : ""}`;
 const openNow = (p) => !!hoursNow(p)?.open;
 
 function creatorsFor(p) {
@@ -287,6 +293,7 @@ function recoverStale() {
 function visiblePlaces({ ignoreCategory = false, ignoreBrowse = false } = {}) {
   return state.places.filter(
     (p) =>
+      !isArchived(p) &&
       (state.status === "all" || p.visit_status === state.status) &&
       (ignoreCategory || !state.category || p.category === state.category) &&
       (!state.openNow || openNow(p)) &&
@@ -314,9 +321,10 @@ function render() {
 
 function renderTally() {
   if (state.guest) return;
-  const want = state.places.filter((p) => p.visit_status === "want").length;
-  const visited = state.places.length - want;
-  $("#tally").textContent = state.places.length ? `${want} to try · ${visited} visited` : "";
+  const active = state.places.filter((p) => !isArchived(p));
+  const want = active.filter((p) => p.visit_status === "want").length;
+  const visited = active.length - want;
+  $("#tally").textContent = active.length ? `${want} to try · ${visited} visited` : "";
 }
 
 function renderCategoryFilter() {
@@ -350,6 +358,7 @@ function renderBanner() {
 
 function setView(view) {
   if (view === "settings" && state.guest) view = "map";
+  if (view !== "list") state.archivedView = false;
   state.view = view;
   savePrefs();
   for (const v of ["map", "list", "cats", "settings"]) $(`#view-${v}`).hidden = v !== view;
@@ -498,7 +507,8 @@ function placeCard(p) {
   const visited = p.visit_status === "visited";
   const sub = [p.cuisine || p.category, cityOf(p)].filter(Boolean).join(" · ");
   const pills = [];
-  if (closedForGood(p)) pills.push(`<span class="pill danger">Closed for good</span>`);
+  if (isArchived(p)) pills.push(`<span class="pill">${esc(archiveLabel(p))}</span>`);
+  else if (closedForGood(p)) pills.push(`<span class="pill danger">Closed for good</span>`);
   else if (p.business_status === "CLOSED_TEMPORARILY") pills.push(`<span class="pill warn">Temporarily closed</span>`);
   else {
     const h = hoursNow(p);
@@ -513,7 +523,7 @@ function placeCard(p) {
   if (creators > 1) extras.push(`<span class="pill accent">${creators} creators</span>`);
   const who = addedByLabel(p);
   if (who) extras.push(`<span class="pill">Added by ${esc(who)}</span>`);
-  return `<button type="button" class="place-card${visited ? " visited" : ""}${closedForGood(p) ? " gone" : ""}" data-open="${esc(p.id)}">
+  return `<button type="button" class="place-card${visited ? " visited" : ""}${closedForGood(p) || isArchived(p) ? " gone" : ""}" data-open="${esc(p.id)}">
     ${thumb(p)}
     <div class="main"><div class="title">${esc(p.name)}</div><div class="sub">${esc(sub)}</div>${extras.length ? `<div class="extras">${extras.join("")}</div>` : ""}</div>
     <div class="meta">${d ? `<div class="distance">${esc(d)}</div>` : ""}${pills.join("")}</div>
@@ -551,17 +561,32 @@ function activeFilters() {
   return chips.length ? `<div class="chip-row" aria-label="Active filters">${chips.join("")}</div>` : "";
 }
 
+function renderArchived(el, q) {
+  const all = state.places.filter(isArchived);
+  const items = sortPlaces(all.filter((p) => matchesSearch(p, q)));
+  el.innerHTML = `<div class="chip-row"><button type="button" class="chip" data-archived-view="0">← Back to your list</button></div>
+    <div class="section-label">Archived · <span class="num">${items.length}</span></div>
+    <p class="hint archived-help">These stay off the map and out of your lists. Sharing another reel of one of them won't save it again. Open one to unarchive it.</p>
+    ${
+      items.length
+        ? `<div class="cards">${items.map(placeCard).join("")}</div>`
+        : `<div class="empty"><h2>${all.length ? "No matches" : "Nothing archived"}</h2><p>${all.length ? "Try another search." : "Open a place and tap Archive to hide it without deleting it."}</p></div>`
+    }`;
+}
+
 function renderList() {
   const el = $("#list");
   const q = state.search.trim();
+  if (state.archivedView && !state.guest) return renderArchived(el, q);
   let html = activeFilters();
   if (state.shares.length) {
     html += `<div class="section-label">Just shared</div><div class="cards">${state.shares.map(inboxCard).join("")}</div>`;
   }
-  const closed = state.places.filter((p) => closedForGood(p) && p.visit_status === "want");
+  const closed = state.places.filter((p) => closedForGood(p) && p.visit_status === "want" && !isArchived(p));
   if (closed.length && !state.guest) {
     html += `<div class="notice"><strong>${closed.length === 1 ? "A place on your list has" : `${closed.length} places on your list have`} closed for good</strong>
-      <div class="btn-row">${closed.map((p) => `<button class="btn small" type="button" data-open="${esc(p.id)}">${esc(p.name)}</button>`).join("")}</div></div>`;
+      <div class="btn-row">${closed.map((p) => `<button class="btn small" type="button" data-open="${esc(p.id)}">${esc(p.name)}</button>`).join("")}</div>
+      <div class="btn-row"><button class="btn small danger" type="button" data-archive-closed>Archive ${closed.length === 1 ? "it" : "them"}</button></div></div>`;
   }
   if (!state.places.length) {
     html += emptyState();
@@ -574,6 +599,12 @@ function renderList() {
     html += items.length
       ? `<div class="cards">${items.map(placeCard).join("")}</div>`
       : `<div class="empty"><h2>No matches</h2><p>${state.openNow ? "Nothing that matches is open right now. Turn off Open now, or" : "Try another search, or"} switch between To try, Visited and All.</p></div>`;
+  }
+  const archived = state.places.filter(isArchived);
+  if (archived.length && !state.guest) {
+    const hits = q ? archived.filter((p) => matchesSearch(p, q)).length : archived.length;
+    html += `<button type="button" class="archived-row" data-archived-view="1">
+      <span>Archived</span><span class="hint num">${q ? `${hits} ${hits === 1 ? "match" : "matches"}` : archived.length}</span></button>`;
   }
   el.innerHTML = html;
 }
@@ -819,7 +850,7 @@ async function recheckAll() {
   const status = $("#recheck-status");
   btn.disabled = true;
   let moved = 0;
-  const list = [...state.places];
+  const list = state.places.filter((p) => !isArchived(p));
   for (let i = 0; i < list.length; i++) {
     status.textContent = `Checking ${i + 1} of ${list.length}: ${list[i].name}`;
     try {
@@ -864,7 +895,7 @@ function download(name, text, type) {
 }
 
 function exportList(kind) {
-  if (kind === "kml") return download("reel-eats.kml", toKml(state.places), "application/vnd.google-earth.kml+xml");
+  if (kind === "kml") return download("reel-eats.kml", toKml(state.places.filter((p) => !isArchived(p))), "application/vnd.google-earth.kml+xml");
   const rows = state.places.map((p) => ({
     name: p.name,
     category: p.category,
@@ -892,6 +923,8 @@ function exportList(kind) {
     reels: (state.sources[p.id] || []).map((s) => s.source_url).filter(Boolean).join(" "),
     posted: p.posted_at ? new Date(p.posted_at).toISOString() : "",
     added_by: p.added_by || "",
+    archived: p.archived_at ? new Date(p.archived_at).toISOString() : "",
+    archive_reason: ARCHIVE_REASONS[p.archive_reason] || "",
     saved: new Date(p.created_at).toISOString(),
   }));
   if (kind === "json") return download("reel-eats.json", JSON.stringify(rows, null, 2), "application/json");
@@ -1067,6 +1100,13 @@ function openPlace(id, { keepScroll = false } = {}) {
     : `<div class="stack">
       <div class="btn-row">
         <button class="btn ${visited ? "good" : ""}" type="button" data-act="toggle-visit">${visited ? "✓ Visited" : "Mark as visited"}</button>
+        ${isArchived(p) ? "" : `<button class="btn" type="button" data-act="archive-open" aria-expanded="false" aria-controls="archive-reasons">Archive</button>`}
+      </div>
+      <div class="archive-reasons" id="archive-reasons" hidden>
+        <div class="hint">Archiving hides it from the map and your lists, and keeps it from being saved again. Why? This part's optional.</div>
+        <div class="btn-row">${Object.entries(ARCHIVE_REASONS)
+          .map(([key, label]) => `<button class="btn small${key === "closed" && closedForGood(p) ? " primary" : ""}" type="button" data-act="archive" data-reason="${key}">${esc(label)}</button>`)
+          .join("")}</div>
       </div>
       ${visited ? `<div class="stars" role="group" aria-label="Your rating">${stars}</div>` : ""}
       <label>Your notes
@@ -1103,13 +1143,19 @@ function openPlace(id, { keepScroll = false } = {}) {
 
   const html = `${sheetHead(p.name, kicker)}
   <div class="sheet-body">
+    ${
+      isArchived(p) && !guest
+        ? `<div class="archived-banner"><div><strong>${esc(archiveLabel(p))}</strong><div class="hint">Hidden from the map and your lists since ${esc(fmtDate(p.archived_at))}.</div></div>
+            <button class="btn small" type="button" data-act="unarchive">Unarchive</button></div>`
+        : ""
+    }
     ${reelStrip(p)}
     <div class="btn-row">
       <a class="btn primary" href="${esc(maps)}" target="_blank" rel="noopener">Google Maps</a>
       <a class="btn" href="${esc(apple)}" target="_blank" rel="noopener">Apple Maps</a>
       ${ig ? `<a class="btn" href="${esc(ig)}" target="_blank" rel="noopener">@${esc(p.instagram_handle)}</a>` : ""}
       ${site ? `<a class="btn" href="${esc(site)}" target="_blank" rel="noopener">Website</a>` : ""}
-      ${p.located ? `<button class="btn" type="button" data-act="show-on-map">Show on map</button>` : ""}
+      ${p.located && !isArchived(p) ? `<button class="btn" type="button" data-act="show-on-map">Show on map</button>` : ""}
     </div>
 
     ${
@@ -1359,7 +1405,7 @@ function bindUI() {
   // Delegated clicks for content that gets re-rendered.
   document.addEventListener("click", async (e) => {
     const t = e.target.closest(
-      "[data-open],[data-go],[data-cat],[data-city],[data-tag],[data-go-soon],[data-clear],[data-dismiss],[data-units],[data-copy],[data-copy-token],[data-export],[data-banner-close],[data-revoke-member],[data-revoke-link],[data-share-url],#recheck-btn,#refresh-btn,#signout-btn,#paste-btn,[data-act]",
+      "[data-open],[data-go],[data-cat],[data-city],[data-tag],[data-go-soon],[data-clear],[data-dismiss],[data-units],[data-copy],[data-copy-token],[data-export],[data-banner-close],[data-revoke-member],[data-revoke-link],[data-share-url],[data-archived-view],[data-archive-closed],#recheck-btn,#refresh-btn,#signout-btn,#paste-btn,[data-act]",
     );
     if (!t) return;
     if (t.dataset.open) return openPlace(t.dataset.open);
@@ -1413,6 +1459,23 @@ function bindUI() {
     if (t.dataset.copyToken !== undefined) return copy(state.token);
     if (t.dataset.shareUrl) return shareLink(t.dataset.shareUrl, t.dataset.shareTitle);
     if (t.dataset.export) return exportList(t.dataset.export);
+    if (t.dataset.archivedView) {
+      state.archivedView = t.dataset.archivedView === "1";
+      renderList();
+      $("#view-list").scrollTop = 0;
+      return;
+    }
+    if (t.dataset.archiveClosed !== undefined) {
+      const closed = state.places.filter((p) => closedForGood(p) && p.visit_status === "want" && !isArchived(p));
+      t.disabled = true;
+      for (const p of closed) {
+        await api(`/api/places/${p.id}`, { method: "PATCH", body: { archived: true, archive_reason: "closed" } }).catch(() => {});
+      }
+      await refresh().catch(() => {});
+      return toast(
+        closed.length === 1 ? `Archived ${closed[0].name}. It's under Archived at the bottom of the list.` : `Archived ${closed.length} places. They're under Archived at the bottom of the list.`,
+      );
+    }
     if (t.dataset.revokeMember) {
       if (!confirmTwice(t, "Tap again to turn off")) return;
       await api(`/api/members/${t.dataset.revokeMember}`, { method: "DELETE" }).catch((err) => toast(err.message));
@@ -1551,6 +1614,16 @@ async function sheetAction(t) {
     return patchPlace(id, { visit_status: next }, next === "visited" ? "Marked as visited." : "Moved back to To try.");
   }
   if (act === "rate") return patchPlace(id, { my_rating: Number(t.dataset.n) });
+  if (act === "archive-open") {
+    const box = $("#archive-reasons");
+    box.hidden = !box.hidden;
+    t.setAttribute("aria-expanded", String(!box.hidden));
+    return;
+  }
+  if (act === "archive") {
+    return patchPlace(id, { archived: true, archive_reason: t.dataset.reason }, "Archived. It's under Archived at the bottom of the list.");
+  }
+  if (act === "unarchive") return patchPlace(id, { archived: false }, "Back on your list.");
   if (act === "branch") return patchPlace(id, { branch_id: t.dataset.id }, "Switched location.");
   if (act === "pick") {
     try {
