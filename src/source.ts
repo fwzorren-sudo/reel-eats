@@ -1,3 +1,4 @@
+import { currentTrace, errorText } from "./trace";
 import type { ApifyUsage, Env, SourceMeta } from "./types";
 
 const BROWSER_UA =
@@ -296,6 +297,8 @@ export interface ActorRun {
 export async function runActor(env: Env, actor: string, url: string, maxChargeUsd: number): Promise<ActorRun | null> {
   const base = env.APIFY_BASE_URL || "https://api.apify.com";
   const id = actor.replace("/", "~");
+  const t0 = Date.now();
+  const log = (ok: boolean, detail?: string, error?: string) => currentTrace()?.add(`apify ${id}`, Date.now() - t0, ok, detail, error);
   try {
     const res = await fetch(
       `${base}/v2/acts/${id}/run-sync-get-dataset-items?timeout=120&maxItems=3&maxTotalChargeUsd=${maxChargeUsd}`,
@@ -309,14 +312,19 @@ export async function runActor(env: Env, actor: string, url: string, maxChargeUs
     if (!res.ok) {
       const body = (await res.text()).slice(0, 400);
       console.warn(`Apify ${id} returned ${res.status}: ${body}`);
+      log(false, undefined, `HTTP ${res.status}: ${body}`);
       if (res.status === 402 || /usage|credit|insufficient|payment/i.test(body)) {
         return { items: [], creditError: `Apify refused to run ${id}: out of monthly credit.` };
       }
       return null;
     }
-    return { items: await res.json() };
+    const items = await res.json();
+    const n = Array.isArray(items) ? items.length : 0;
+    log(true, `${n} ${n === 1 ? "result" : "results"}`);
+    return { items };
   } catch (err) {
     console.warn(`Apify ${id} request failed`, err);
+    log(false, undefined, errorText(err));
     return null;
   }
 }
@@ -390,28 +398,35 @@ export async function fetchApifyUsage(env: Env): Promise<Omit<ApifyUsage, "check
   }
 }
 
-async function getText(url: string, ua: string): Promise<{ status: number; url: string; body: string }> {
-  const res = await fetch(url, {
-    headers: { "User-Agent": ua, Accept: "text/html,application/xhtml+xml", "Accept-Language": "en-US,en;q=0.9" },
-    redirect: "follow",
-    signal: AbortSignal.timeout(8000),
-  });
-  const body = res.ok ? await res.text() : "";
-  return { status: res.status, url: res.url || url, body };
+async function getText(url: string, ua: string, step = "web page"): Promise<{ status: number; url: string; body: string }> {
+  const t0 = Date.now();
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": ua, Accept: "text/html,application/xhtml+xml", "Accept-Language": "en-US,en;q=0.9" },
+      redirect: "follow",
+      signal: AbortSignal.timeout(8000),
+    });
+    const body = res.ok ? await res.text() : "";
+    currentTrace()?.add(step, Date.now() - t0, res.ok, `HTTP ${res.status}, ${body.length} characters`);
+    return { status: res.status, url: res.url || url, body };
+  } catch (err) {
+    currentTrace()?.add(step, Date.now() - t0, false, undefined, errorText(err));
+    throw err;
+  }
 }
 
 /** Instagram's own pages: the embed page first, then the link-preview tags. */
 async function readInstagramPage(canonical: string, code: string): Promise<SourceMeta> {
   let best: SourceMeta = emptyMeta(canonical);
   try {
-    const embed = await getText(`https://www.instagram.com/p/${code}/embed/captioned/`, BROWSER_UA);
+    const embed = await getText(`https://www.instagram.com/p/${code}/embed/captioned/`, BROWSER_UA, "instagram embed page");
     if (embed.body) best = finish(canonical, parseInstagramEmbed(embed.body), "embed");
   } catch {
     /* fall through */
   }
   if (!best.caption) {
     try {
-      const page = await getText(canonical, PREVIEW_UA);
+      const page = await getText(canonical, PREVIEW_UA, "instagram link preview");
       if (page.body) {
         const og = parseOpenGraph(page.body);
         best = finish(

@@ -544,6 +544,7 @@ function inboxCard(s) {
       </form>
       <div class="btn-row">
         ${safeUrl(s.source_url) ? `<a class="btn small" href="${esc(safeUrl(s.source_url))}" target="_blank" rel="noopener">Open post</a>` : ""}
+        ${isOwner() ? `<button class="btn small" type="button" data-debug-share="${esc(s.id)}">Details</button>` : ""}
         <button class="btn small danger" type="button" data-dismiss="${esc(s.id)}">Dismiss</button>
       </div>
     </div>`;
@@ -909,6 +910,11 @@ function exportList(kind) {
     lng: p.lng ?? "",
     distance_from_home: p.located ? fmtDist(p.distance_m) : "",
     locations_found: p.branch_count,
+    branch_kept: p.keep_branch ? "yes" : "",
+    other_locations: (p.branches || [])
+      .filter((b) => b.id !== p.google_place_id)
+      .map((b) => b.address)
+      .join("; "),
     google_maps: p.maps_url || "",
     website: p.website || "",
     phone: p.phone || "",
@@ -928,7 +934,16 @@ function exportList(kind) {
     archive_reason: ARCHIVE_REASONS[p.archive_reason] || "",
     saved: new Date(p.created_at).toISOString(),
   }));
-  if (kind === "json") return download("reel-eats.json", JSON.stringify(rows, null, 2), "application/json");
+  if (kind === "json") {
+    // JSON gets every location in full, not just the addresses.
+    const full = rows.map((r, i) => ({
+      ...r,
+      other_locations: (state.places[i].branches || [])
+        .filter((x) => x.id !== state.places[i].google_place_id)
+        .map((x) => ({ name: x.name, address: x.address, lat: x.lat, lng: x.lng, google_maps: x.mapsUrl, phone: x.phone, website: x.website })),
+    }));
+    return download("reel-eats.json", JSON.stringify(full, null, 2), "application/json");
+  }
   const cols = Object.keys(rows[0] || { name: "" });
   const cell = (v) => `"${String(v).replace(/"/g, '""')}"`;
   download("reel-eats.csv", [cols.join(","), ...rows.map((r) => cols.map((c) => cell(r[c])).join(","))].join("\n"), "text/csv");
@@ -1044,7 +1059,8 @@ function openPlace(id, { keepScroll = false } = {}) {
   if (closedForGood(p)) facts.push(`<div class="fact">${ICON.alert}<div><span class="pill danger">Closed for good</span> <span class="muted">Google lists this place as permanently closed.</span></div></div>`);
   if (p.located) {
     const dist = p.distance_m != null && !guest ? `${fmtDist(p.distance_m)} from home` : "";
-    const branches = p.branch_count > 1 ? `${guest ? "One" : "Closest"} of ${p.branch_count} locations found` : "";
+    const branches =
+      p.branch_count > 1 ? `${guest ? "One" : p.keep_branch ? "Kept this branch, one" : "Closest"} of ${p.branch_count} locations found` : "";
     facts.push(
       `<div class="fact">${ICON.pin}<div>${esc(p.address)}<div class="muted">${esc([dist, branches].filter(Boolean).join(" · "))}</div></div></div>`,
     );
@@ -1079,7 +1095,12 @@ function openPlace(id, { keepScroll = false } = {}) {
   const branches = p.branches || [];
   const branchList =
     branches.length > 1 && !guest
-      ? `<details class="more"><summary>All ${branches.length} locations</summary><div class="branch-list">${branches
+      ? `<details class="more"><summary>All ${branches.length} locations</summary>${
+          p.keep_branch
+            ? `<div class="kept-note"><span class="hint">This branch stays put when you move, because it's where the reel's pop-up or event is, or you picked it.</span>
+                <button class="btn small" type="button" data-act="nearest-branch">Use the closest branch</button></div>`
+            : `<p class="hint">Pick one to keep it, even after you move.</p>`
+        }<div class="branch-list">${branches
           .map((b) => {
             const d = state.home ? fmtDist(haversine(state.home.lat, state.home.lng, b.lat, b.lng)) : "";
             return `<button type="button" class="branch${b.id === p.google_place_id ? " current" : ""}" data-act="branch" data-id="${esc(b.id)}">
@@ -1174,10 +1195,68 @@ function openPlace(id, { keepScroll = false } = {}) {
 
     ${caption}
 
+    ${isOwner() ? `<details class="more" data-debug-place="${esc(p.id)}"><summary>Debugging details</summary><div class="debug-box">Loading…</div></details>` : ""}
+
     ${guest ? "" : `<div class="btn-row"><button class="btn danger" type="button" data-act="delete">Delete from list</button></div>`}
   </div>`;
   openSheet(html, { type: "place", id });
   if (prevScroll) $("#sheet .sheet-body").scrollTop = prevScroll;
+}
+
+/* ---------- debugging details ---------- */
+const secs = (ms) => `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} s`;
+const dur = (ms) => (ms < 1000 ? `${ms} ms` : secs(ms));
+const when = (ts) => new Date(ts).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
+let lastDebug = null;
+
+function renderDebug(shares) {
+  if (!shares.length) return `<p class="hint">Nothing logged for this place.</p>`;
+  const html = shares
+    .map((s) => {
+      const attempts = [...(s.attempts || [])].reverse();
+      const what = s.source_url ? s.source_url.replace(/^https:\/\/(www\.)?/, "") : s.note ? `Typed: ${s.note}` : "Shared text";
+      const stored = s.stored.raw_post
+        ? `Stored: post ${Math.max(1, Math.round(s.stored.raw_post / 1024))} KB, transcript ${s.stored.transcript ? `${s.stored.transcript} characters` : s.stored.raw_transcript ? "none (no speech)" : "none"}`
+        : "";
+      const head = `<div class="debug-head"><strong>${esc(what)}</strong>
+        <span class="hint">${esc(s.status)} · ${s.attempts_count} ${s.attempts_count === 1 ? "attempt" : "attempts"} · shared ${esc(when(s.created_at))}</span>
+        ${stored ? `<span class="hint">${esc(stored)}</span>` : ""}
+        ${s.error ? `<span class="error-text">${esc(s.error)}</span>` : ""}</div>`;
+      const list = attempts.length
+        ? attempts
+            .map(
+              (a, i) => `<details class="attempt"${i === 0 ? " open" : ""}><summary><span class="outcome ${esc(a.outcome.replace(/\s+/g, "-"))}">${esc(a.outcome)}</span>
+                ${esc(when(a.started))} · ${esc(a.trigger)} · ${esc(secs(a.ms))}</summary>
+                ${a.error ? `<div class="error-text">${esc(a.error)}</div>` : ""}
+                <ol class="steps">${a.steps
+                  .map(
+                    (st) => `<li class="${st.ok ? "" : "bad"}"><span class="t num">+${esc(secs(st.at))}</span><span class="name">${esc(st.step)}</span>${
+                      st.ms ? `<span class="ms num">${esc(dur(st.ms))}</span>` : ""
+                    }${st.detail ? `<div class="d">${esc(st.detail)}</div>` : ""}${st.error ? `<div class="d error-text">${esc(st.error)}</div>` : ""}</li>`,
+                  )
+                  .join("")}</ol></details>`,
+            )
+            .join("")
+        : `<p class="hint">No attempts logged. This reel was saved before the log existed.</p>`;
+      return `<div class="debug-share">${head}${list}</div>`;
+    })
+    .join("");
+  return `${html}<div class="btn-row"><button class="btn small" type="button" data-copy-debug>Copy log</button></div>`;
+}
+
+async function loadDebug(box, path) {
+  try {
+    const { shares } = await api(path);
+    lastDebug = shares;
+    box.innerHTML = renderDebug(shares);
+  } catch (e) {
+    if (!(e instanceof Unauthorized)) box.innerHTML = `<p class="error-text">${esc(e.message)}</p>`;
+  }
+}
+
+function openShareDebug(id) {
+  resultSheet("Debugging details", `<div class="debug-box">Loading…</div>`, { type: "debug" });
+  loadDebug($("#sheet .debug-box"), `/api/shares/${enc(id)}/debug`);
 }
 
 async function patchPlace(id, body, msg) {
@@ -1406,7 +1485,7 @@ function bindUI() {
   // Delegated clicks for content that gets re-rendered.
   document.addEventListener("click", async (e) => {
     const t = e.target.closest(
-      "[data-open],[data-go],[data-cat],[data-city],[data-tag],[data-go-soon],[data-clear],[data-dismiss],[data-units],[data-copy],[data-copy-token],[data-export],[data-banner-close],[data-revoke-member],[data-revoke-link],[data-share-url],[data-archived-view],[data-archive-closed],#recheck-btn,#refresh-btn,#signout-btn,#paste-btn,[data-act]",
+      "[data-open],[data-go],[data-cat],[data-city],[data-tag],[data-go-soon],[data-clear],[data-dismiss],[data-units],[data-copy],[data-copy-token],[data-export],[data-banner-close],[data-revoke-member],[data-revoke-link],[data-share-url],[data-debug-share],[data-copy-debug],[data-archived-view],[data-archive-closed],#recheck-btn,#refresh-btn,#signout-btn,#paste-btn,[data-act]",
     );
     if (!t) return;
     if (t.dataset.open) return openPlace(t.dataset.open);
@@ -1460,6 +1539,8 @@ function bindUI() {
     if (t.dataset.copyToken !== undefined) return copy(state.token);
     if (t.dataset.shareUrl) return shareLink(t.dataset.shareUrl, t.dataset.shareTitle);
     if (t.dataset.export) return exportList(t.dataset.export);
+    if (t.dataset.debugShare) return openShareDebug(t.dataset.debugShare);
+    if (t.dataset.copyDebug !== undefined) return copy(JSON.stringify(lastDebug, null, 2));
     if (t.dataset.archivedView) {
       state.archivedView = t.dataset.archivedView === "1";
       renderList();
@@ -1572,6 +1653,19 @@ function bindUI() {
     }
   });
 
+  // "toggle" doesn't bubble, so listen while it's on its way down.
+  document.addEventListener(
+    "toggle",
+    (e) => {
+      const d = e.target;
+      if (d instanceof HTMLDetailsElement && d.open && d.dataset.debugPlace && !d.dataset.loaded) {
+        d.dataset.loaded = "1";
+        loadDebug(d.querySelector(".debug-box"), `/api/places/${enc(d.dataset.debugPlace)}/debug`);
+      }
+    },
+    true,
+  );
+
   document.addEventListener("change", (e) => {
     if (e.target.id === "place-notes" && state.sheet?.type === "place") {
       patchPlace(state.sheet.id, { notes: e.target.value }, "Notes saved.");
@@ -1625,7 +1719,8 @@ async function sheetAction(t) {
     return patchPlace(id, { archived: true, archive_reason: t.dataset.reason }, "Archived. It's under Archived at the bottom of the list.");
   }
   if (act === "unarchive") return patchPlace(id, { archived: false }, "Back on your list.");
-  if (act === "branch") return patchPlace(id, { branch_id: t.dataset.id }, "Switched location.");
+  if (act === "branch") return patchPlace(id, { branch_id: t.dataset.id }, "Switched location. It stays put when you move.");
+  if (act === "nearest-branch") return patchPlace(id, { keep_branch: false }, "Switched to the branch closest to home.");
   if (act === "pick") {
     try {
       await api(`/api/places/${id}/select`, { method: "POST", body: { place_id: t.dataset.id } });

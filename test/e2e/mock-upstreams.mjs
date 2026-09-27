@@ -51,6 +51,9 @@ const PLACES = {
   rb_high: P("rb_high", "Rosetta Bakery", 33.9296, -84.344, { address: "120 High St, Dunwoody, GA 30346", city: "Dunwoody", website: "https://www.rosettabakery.com/", type: "bakery", typeLabel: "Bakery" }),
   rb_west: P("rb_west", "Rosetta Bakery", 33.787, -84.412, { address: "1100 Howell Mill Rd, Atlanta, GA 30318", city: "Atlanta", website: "https://www.rosettabakery.com/", type: "bakery", typeLabel: "Bakery" }),
   gk: P("gk", "Grandma's Kitchen", 40.7306, -73.9866, { address: "10 E 14th St, New York, NY 10003", type: "american_restaurant", typeLabel: "American Restaurant" }),
+  // A chain with a branch near home and one where a pop-up is filmed.
+  tt_near: P("tt_near", "Taco Tuesday Co Murray Hill", 40.747, -73.979, { address: "150 E 34th St, New York, NY 10016", website: "https://tacotuesday.example/murray-hill", type: "mexican_restaurant", typeLabel: "Mexican Restaurant" }),
+  tt_far: P("tt_far", "Taco Tuesday Co Chelsea", 40.744, -73.996, { address: "200 W 23rd St, New York, NY 10011", website: "https://tacotuesday.example/chelsea", type: "mexican_restaurant", typeLabel: "Mexican Restaurant" }),
   katz: P("katz", "Katz's Delicatessen", 40.7223, -73.9874, { address: "205 E Houston St, New York, NY 10002", type: "sandwich_shop", typeLabel: "Deli", hours: DAILY }),
 };
 
@@ -84,6 +87,11 @@ const SEARCH = {
   "Rosetta Bakery 120 High Street, Dunwoody, GA": ["rb_high"],
   "Rosetta Bakery Dunwoody, GA": ["rb_high"],
   "Katz's Delicatessen": ["katz"],
+  "Taco Tuesday Co Chelsea": ["tt_far"],
+  "Taco Tuesday Co Chelsea 200 W 23rd St, New York": ["tt_far"],
+  "Taco Tuesday Co": ["tt_near", "tt_far"],
+  "Taco Tuesday Co New York, NY": ["tt_far"],
+  "Taco Tuesday": ["tt_near", "tt_far"],
 };
 
 // Real results from Apify, used as-is.
@@ -142,6 +150,13 @@ const REELS = {
   TACOS2: { ownerUsername: "queenseats", caption: "Date night at @tacosdelnorte, the birria is unreal", locationName: "" },
   // Post Details fails for this one, so the official scraper is used.
   FALLBACK: { ownerUsername: "lucalifan", caption: "📍 Lucali, Carroll Gardens. Worth the wait.", locationName: "" },
+  // A Halloween pop-up at one branch of a chain; another branch is nearer home.
+  POPUP1: {
+    ownerUsername: "spookyeats",
+    caption: "The Wicked Pig has taken over Taco Tuesday Co Chelsea for Halloween 🎃 spooky cocktails all month",
+    locationName: "Taco Tuesday Co Chelsea",
+    location: { name: "Taco Tuesday Co Chelsea", lat: 40.744, lng: -73.996, address: "200 W 23rd St", city: "New York" },
+  },
   // Post Details takes 18 seconds for this one, too long to finish in the background.
   SLOW1: { ownerUsername: "slowreels", caption: "📍 Tsujita LA, Sawtelle. The tsukemen is unreal.", locationName: "" },
 };
@@ -169,7 +184,7 @@ function postDetails(code) {
     taken_at: 1790000000,
     caption: { text: r.caption, mentions: [] },
     user: { username: r.ownerUsername, full_name: r.ownerFullName || "" },
-    location: r.locationName ? { name: r.locationName, lat: 40.7414, lng: -73.9882, address: "Madison Ave & E 23rd St", city: "New York" } : null,
+    location: r.location ?? (r.locationName ? { name: r.locationName, lat: 40.7414, lng: -73.9882, address: "Madison Ave & E 23rd St", city: "New York" } : null),
     tagged_users: [],
     coauthor_producers: [],
     thumbnail_url: image(code),
@@ -197,6 +212,7 @@ function decide(text, hasImage) {
   if (t.includes("rosetta bakery")) return { places: [venue("Rosetta Bakery", "Bakery & Desserts", "Dunwoody, GA", { cuisine: "Italian bakery", multi: true })], reason: "" };
   if (t.includes("absolute bagels")) return { places: [venue("Absolute Bagels", "Bakery & Desserts", "New York, NY", { cuisine: "Bagels" })], reason: "" };
   if (t.includes("tsujita")) return { places: [venue("Tsujita LA", "Ramen & Noodles", "Los Angeles, CA", { cuisine: "Tsukemen" })], reason: "" };
+  if (t.includes("taco tuesday")) return { places: [venue("Taco Tuesday Co", "Tacos & Mexican", "New York, NY", { cuisine: "Tacos", multi: true })], reason: "" };
   if (t.includes("katz")) return { places: [venue("Katz's Delicatessen", "Sandwiches & Deli", "New York, NY", { cuisine: "Pastrami" })], reason: "" };
   if (t.includes("grandma")) return { places: [venue("Grandma's Kitchen Pop-up", "Other", "", {})], reason: "" };
   if (t.includes("mystery")) return { places: [], reason: "The caption only shows a plate of food with no venue name, tag or location." };

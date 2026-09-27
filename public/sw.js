@@ -1,5 +1,5 @@
 /* Offline shell for Reel Eats. API calls always go to the network. */
-const VERSION = "reel-eats-v6";
+const VERSION = "reel-eats-v7";
 const SHELL = [
   "/",
   "/index.html",

@@ -62,6 +62,19 @@ assert.equal(share1.length, 1);
 assert.equal(share1[0].source_author, "nycfoodie");
 step("keeps the handle, hours, post date, cover image and a 'go soon' note from the transcript");
 
+r = await call(`/api/shares/${p.share_id}/debug`);
+assert.equal(r.status, 200, JSON.stringify(r.data));
+let attempts = r.data.shares[0].attempts;
+assert.equal(attempts.length, 1);
+assert.equal(attempts[0].outcome, "done");
+assert.equal(attempts[0].trigger, "waiting");
+const stepNames = new Set(attempts[0].steps.map((x) => x.step));
+for (const name of ["apify data-slayer~instagram-post-details", "apify apple_yang~instagram-transcripts-scraper", "cover image", "google search", "match", "saved"]) {
+  assert.ok(stepNames.has(name), `log has ${name}: ${[...stepNames].join(", ")}`);
+}
+assert.ok(attempts[0].steps.every((x) => typeof x.ms === "number" && typeof x.at === "number"));
+step("logs each outside call with its timing and result");
+
 r = await call("/api/home", { method: "PUT", body: { address: "350 5th Ave, New York" } });
 assert.equal(r.status, 200, JSON.stringify(r.data));
 assert.equal(r.data.home.address, "350 5th Ave, New York, NY 10118, USA");
@@ -116,7 +129,11 @@ assert.equal(r.data.shares.find((s) => s.id === mysteryId).status, "failed");
 r = await call(`/api/shares/${mysteryId}/retry`, { method: "POST", body: { note: "Lucali, Carroll Gardens" } });
 assert.equal(r.data.status, "done", JSON.stringify(r.data));
 assert.equal(r.data.places[0].google_place_id, "lucali");
-step("asks for a name when the post is unclear, then saves it on retry");
+r = await call(`/api/shares/${mysteryId}/debug`);
+attempts = r.data.shares[0].attempts;
+assert.deepEqual(attempts.map((a) => `${a.trigger}: ${a.outcome}`), ["waiting: failed", "retry: done"]);
+assert.match(attempts[0].error, MODE === "claude" ? /no venue name/ : /Couldn't find a restaurant/);
+step("asks for a name when the post is unclear, then saves it on retry, with both attempts logged");
 
 r = await share({ url: IG("FALLBACK") });
 assert.equal(r.data.status, "done", JSON.stringify(r.data));
@@ -215,10 +232,15 @@ step("marks visited with a rating and notes, and validates input");
 const shack = byGoogle(places, "ss_hs");
 r = await call(`/api/places/${shack.id}`, { method: "PATCH", body: { branch_id: "ss_msp" } });
 assert.equal(r.data.place.google_place_id, "ss_msp");
+assert.equal(r.data.place.keep_branch, 1);
 r = await call(`/api/places/${shack.id}/recheck`, { method: "POST" });
 assert.equal(r.data.found, true);
+assert.equal(r.data.place.google_place_id, "ss_msp", "a branch picked by hand survives a re-check");
+r = await call(`/api/places/${shack.id}`, { method: "PATCH", body: { keep_branch: false } });
 assert.equal(r.data.place.google_place_id, "ss_hs");
-step("switches branches by hand and re-checks back to the nearest");
+r = await call(`/api/places/${shack.id}/recheck`, { method: "POST" });
+assert.equal(r.data.place.google_place_id, "ss_hs");
+step("switches branches by hand, keeps that choice, and goes back to the nearest on request");
 
 r = await call(`/api/search?q=${encodeURIComponent("Lucali Brooklyn, NY")}`);
 assert.equal(r.data.results[0].id, "lucali");
@@ -259,6 +281,8 @@ assert.equal(r.data.status, "done", JSON.stringify(r.data));
 assert.equal(r.data.places[0].added_by, "Sam");
 r = await call("/api/members", { token: samCode });
 assert.equal(r.status, 403);
+r = await call(`/api/places/${lucali.id}/debug`, { token: samCode });
+assert.equal(r.status, 403, "only the owner sees debugging details");
 r = await call("/api/members");
 assert.deepEqual(r.data.members.map((x) => x.name), ["Sam"]);
 assert.equal(r.data.members[0].code_hash, undefined, "the code's hash stays on the server");
@@ -322,6 +346,33 @@ assert.equal(r.data.place.archive_reason, null);
 assert.equal(r.data.place.visit_status, "visited");
 step("unarchives a place");
 
+/* ----- a pop-up at one branch of a chain ----- */
+r = await share({ url: IG("POPUP1") });
+assert.equal(r.data.status, "done", JSON.stringify(r.data));
+let tt = r.data.places[0];
+assert.equal(tt.name, "Taco Tuesday Co");
+assert.equal(tt.go_soon, "Pop-up");
+assert.equal(tt.google_place_id, "tt_far", "the pop-up's branch, not the one nearest home");
+assert.equal(tt.keep_branch, 1);
+assert.equal(tt.branch_count, 2);
+r = await call(`/api/shares/${tt.share_id}/debug`);
+const ttSteps = r.data.shares[0].attempts[0].steps;
+assert.ok(ttSteps.some((x) => x.step === "google search" && / near home → /.test(x.detail)), "home is named, not its coordinates");
+assert.ok(ttSteps.some((x) => x.step === "google search" && /within 2 km of 40\.7440,-73\.9960/.test(x.detail)), "searched around the reel's location tag");
+assert.ok(ttSteps.some((x) => x.step === "branch" && /200 W 23rd St/.test(x.detail)), "the log says why the branch was kept");
+await call("/api/home", { method: "PUT", body: { address: "Lucali Brooklyn, NY" } });
+tt = (await call("/api/state")).data.places.find((x) => x.id === tt.id);
+assert.equal(tt.google_place_id, "tt_far", "moving home doesn't move a kept branch");
+await call("/api/home", { method: "PUT", body: { address: "350 5th Ave, New York" } });
+r = await call(`/api/places/${tt.id}/recheck`, { method: "POST" });
+assert.equal(r.data.place.google_place_id, "tt_far", "re-checking leaves it too");
+r = await call(`/api/places/${tt.id}`, { method: "PATCH", body: { keep_branch: false } });
+assert.equal(r.data.place.google_place_id, "tt_near");
+assert.equal(r.data.place.keep_branch, 0);
+r = await call(`/api/places/${tt.id}`, { method: "PATCH", body: { branch_id: "tt_far" } });
+assert.equal(r.data.place.keep_branch, 1, "a branch picked by hand is kept");
+step("keeps the branch in the reel for a pop-up, and a branch picked by hand, through moves and re-checks");
+
 /* ----- a reel that's slow to read, shared in the background ----- */
 r = await call("/api/share", { method: "POST", body: { url: IG("SLOW1") } });
 assert.equal(r.status, 202, JSON.stringify(r.data));
@@ -341,6 +392,8 @@ assert.equal(tick.status, 200);
 assert.equal(await shareOf(), undefined, "the every-minute job finished it");
 const apifyCalls = await fetch(`${MOCK}/__calls`).then((x) => x.json());
 assert.equal(apifyCalls["data-slayer~instagram-post-details SLOW1"], 1, "the reel was read from Apify once");
+r = await call(`/api/shares/${slowId}/debug`);
+assert.deepEqual(r.data.shares[0].attempts.map((a) => `${a.trigger}: ${a.outcome}`), ["background: handed over", "every-minute job: done"]);
 step("hands a slow reel to the every-minute job, which finishes it without paying Apify again");
 
 console.log(`\nAll end-to-end checks passed (${MODE}).`);

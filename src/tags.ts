@@ -75,6 +75,12 @@ export function cleanTags(...lists: (unknown[] | null | undefined)[]): string[] 
 const MONTH = "(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?";
 const UNTIL = new RegExp(`\\b(?:until|through|thru|till|til|ends?|ending)\\s+(${MONTH}\\s+\\d{1,2}(?:st|nd|rd|th)?|\\d{1,2}\\/\\d{1,2})`, "i");
 
+/** A pop-up, seasonal or limited-time note: tied to one branch and a window of time, unlike "New opening". */
+export function isEventNote(note: string | null | undefined): boolean {
+  if (!note || /^new opening$/i.test(note.trim())) return false;
+  return /pop-?up|take ?over|taken over|limited|seasonal|through|until|only|halloween|christmas|holiday|this weekend|event/i.test(note);
+}
+
 /**
  * A reason to go soon, when the post says the place just opened, is a pop-up, or has
  * something for a limited time. Returns "" when there's none.

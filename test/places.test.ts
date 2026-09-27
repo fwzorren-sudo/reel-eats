@@ -298,3 +298,31 @@ describe("food check", () => {
     }
   });
 });
+
+describe("the branch in the reel", () => {
+  const client = new PlacesClient("test-key");
+  const site = { websiteUri: "https://tinlizzyscantina.com/", primaryType: "mexican_restaurant", types: ["mexican_restaurant", "restaurant", "food"] };
+  const downtown = raw("tl_down", "Tin Lizzy's Cantina", 33.7603, -84.3915, site);
+  const midtown = raw("tl_mid", "Tin Lizzy's Taco Americana", 33.7847, -84.3847, site);
+  const kennesaw = raw("tl_ken", "Tin Lizzy's Cantina", 34.0151, -84.5677, site);
+
+  it("is reported alongside the nearest one, from the location tag's coordinates", async () => {
+    mockGoogle({
+      "Tin Lizzy's Cantina": [downtown, midtown, kennesaw],
+      "Tin Lizzy's Cantina 77 12th St NE": [midtown, downtown],
+      "Tin Lizzy's": [downtown, midtown, kennesaw],
+    });
+    const tag = place({ name: "Tin Lizzy's Cantina", search_query: "Tin Lizzy's Cantina", address_hint: "77 12th St NE", near: { lat: 33.78467, lng: -84.38468, radius: 1500 } });
+    const carrollton = { address: "Carrollton, GA", lat: 33.5801, lng: -85.0766 };
+    const res = await resolveBranch(client, tag, carrollton);
+    expect(res?.best.id).toBe("tl_down");
+    expect(res?.filmed?.id).toBe("tl_mid");
+    expect(res?.branches.map((b) => b.id)).toContain("tl_mid");
+  });
+
+  it("is unknown when the post doesn't say where", async () => {
+    mockGoogle({ "Tin Lizzy's Cantina": [downtown, midtown] });
+    const res = await resolveBranch(client, place({ name: "Tin Lizzy's Cantina", search_query: "Tin Lizzy's Cantina" }), { address: "x", lat: 33.58, lng: -85.08 });
+    expect(res?.filmed).toBeNull();
+  });
+});

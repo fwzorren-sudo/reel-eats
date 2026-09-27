@@ -7,6 +7,7 @@ import type {
 } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 import { locationLine } from "./identify";
 import { cleanTags } from "./tags";
+import { traced } from "./trace";
 import { CATEGORIES, TAGS, type Category, type Env, type Extraction, type ExtractedPlace, type SourceMeta } from "./types";
 
 export class ExtractionError extends Error {}
@@ -187,7 +188,11 @@ export async function extractPlaces(env: Env, input: ExtractionInput): Promise<E
       ...(effort && !isHaiku ? { output_config: { effort: effort as "low" | "medium" | "high" } } : {}),
       ...(supportsFallbacks ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
     };
-    const response = await client.beta.messages.create(params);
+    const response = await traced(
+      "claude",
+      () => client.beta.messages.create(params),
+      (r) => `${r.stop_reason}, ${r.usage.input_tokens} in / ${r.usage.output_tokens} out tokens`,
+    );
 
     if (response.stop_reason === "refusal") {
       throw new ExtractionError("Claude declined to process this post.");

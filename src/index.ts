@@ -32,6 +32,7 @@ import { engineFor, placesClient, processShare, recheckPlace, rereadShare, summa
 import { geocodeHome, PlacesError } from "./places";
 import { canonicalUrl, extractFirstUrl } from "./source";
 import { cleanTags } from "./tags";
+import { errorText, mergeAttempt, runTraced, Trace } from "./trace";
 import { backfillPhotos, checkApifyUsage, DAILY_CRON, refreshPlaces, runDailyUpkeep } from "./upkeep";
 import {
   ARCHIVE_REASONS,
@@ -59,8 +60,8 @@ const DEFER_AFTER_MS = 17_000;
  * Process a share and wait for it. It also runs as background work, so it carries on for a while
  * if the phone disconnects, for example when the share menu closes before the Shortcut finishes.
  */
-function processNow(env: Env, ctx: ExecutionContext, id: string) {
-  const job = processShare(env, id);
+function processNow(env: Env, ctx: ExecutionContext, id: string, trigger: string) {
+  const job = processShare(env, id, { trigger });
   ctx.waitUntil(job.catch(() => undefined));
   return job;
 }
@@ -232,10 +233,10 @@ async function handleShare(req: Request, env: Env, ctx: ExecutionContext, url: U
     }
     if (previous && previous.status !== "processing") {
       if (wait) {
-        const r = await processNow(env, ctx, previous.id);
+        const r = await processNow(env, ctx, previous.id, "waiting");
         return reply({ ...r, share_id: previous.id });
       }
-      ctx.waitUntil(processShare(env, previous.id, { deferAfterMs: DEFER_AFTER_MS }).catch(() => undefined));
+      ctx.waitUntil(processShare(env, previous.id, { deferAfterMs: DEFER_AFTER_MS, trigger: "background" }).catch(() => undefined));
       return reply({ status: "queued", message: "Saved. Finding the restaurant now.", share_id: previous.id });
     }
     if (previous) return reply({ status: "queued", message: "Already working on this one.", share_id: previous.id });
@@ -251,10 +252,10 @@ async function handleShare(req: Request, env: Env, ctx: ExecutionContext, url: U
   });
 
   if (wait) {
-    const r = await processNow(env, ctx, share.id);
+    const r = await processNow(env, ctx, share.id, "waiting");
     return reply({ ...r, share_id: share.id });
   }
-  ctx.waitUntil(processShare(env, share.id, { deferAfterMs: DEFER_AFTER_MS }).catch(() => undefined));
+  ctx.waitUntil(processShare(env, share.id, { deferAfterMs: DEFER_AFTER_MS, trigger: "background" }).catch(() => undefined));
   return reply({ status: "queued", message: "Saved. Finding the restaurant now.", share_id: share.id }, 202);
 }
 
@@ -262,7 +263,10 @@ function withDistance(c: PlaceCandidate, home: Home | null): PlaceCandidate {
   return { ...c, distanceM: home ? Math.round(distanceMeters(home.lat, home.lng, c.lat, c.lng)) : null };
 }
 
-/** After the home address changes, refresh distances and switch to the closest stored branch. */
+/**
+ * After the home address changes, refresh distances and switch to the closest stored branch,
+ * except where the branch is kept: a pop-up at the branch in the reel, or one picked by hand.
+ */
 async function refreshDistances(env: Env, home: Home): Promise<void> {
   const places = await listPlaces(env.DB);
   const stmts: D1PreparedStatement[] = [];
@@ -278,7 +282,7 @@ async function refreshDistances(env: Env, home: Home): Promise<void> {
     const nearest = branches[0];
     // Stored branches don't carry hours, so a switched place gets fresh details from the daily job.
     const fields: Partial<PlaceRow> =
-      nearest && nearest.id !== p.google_place_id
+      nearest && nearest.id !== p.google_place_id && !p.keep_branch
         ? { ...candidateFields(nearest), branches: JSON.stringify(branches), refreshed_at: null }
         : {
             distance_m: Math.round(distanceMeters(home.lat, home.lng, p.lat!, p.lng!)),
@@ -332,16 +336,24 @@ async function patchPlace(env: Env, place: PlaceRow, body: Record<string, unknow
     if (r !== null && !(Number.isInteger(r) && r >= 1 && r <= 5)) throw new HttpError(400, "Rating must be 1 to 5.");
     f.my_rating = r;
   }
-  if (body.branch_id !== undefined) {
-    const branches: PlaceCandidate[] = JSON.parse(place.branches || "[]");
-    const chosen = branches.find((b) => b.id === body.branch_id);
-    if (!chosen) throw new HttpError(400, "That branch isn't in the saved list.");
+  // Picking a branch by hand keeps it, even after moving house. keep_branch: false goes back
+  // to the branch nearest home.
+  if (body.branch_id !== undefined || body.keep_branch === false) {
     const home = await getHome(env.DB);
+    const branches = (JSON.parse(place.branches || "[]") as PlaceCandidate[]).map((b) => withDistance(b, home));
+    const chosen =
+      body.branch_id !== undefined
+        ? branches.find((b) => b.id === body.branch_id)
+        : [...branches].sort((a, b) => (a.distanceM ?? Infinity) - (b.distanceM ?? Infinity))[0];
+    if (!chosen) throw new HttpError(400, "That branch isn't in the saved list.");
     // Fresh details bring that branch's own hours. The stored copy is the fallback.
     const fresh = await placesClient(env)
       .details(chosen.id, home)
       .catch(() => null);
-    Object.assign(f, candidateFields(fresh ?? withDistance(chosen, home)), { refreshed_at: fresh ? now() : null });
+    Object.assign(f, candidateFields(fresh ?? chosen), {
+      refreshed_at: fresh ? now() : null,
+      keep_branch: body.branch_id !== undefined ? 1 : 0,
+    });
   }
   return updatePlace(env.DB, place.id, f);
 }
@@ -474,7 +486,43 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
       const note = body.note?.trim().slice(0, 500);
       await updateShare(db, share.id, { status: "pending", error: null, ...(note ? { note } : {}) });
     }
-    return json(await processNow(env, ctx, share.id));
+    return json(await processNow(env, ctx, share.id, m[2] === "retry" ? "retry" : "app"));
+  }
+
+  // The debug log for a share, or for every share behind a place. Owner only.
+  if ((m = path.match(/^\/api\/(shares|places)\/([\w-]+)\/debug$/)) && method === "GET") {
+    requireOwner(viewer);
+    let ids = [m[2]];
+    if (m[1] === "places") {
+      const place = await getPlace(db, m[2]);
+      if (!place) throw new HttpError(404, "Place not found.");
+      const { results } = await db.prepare("SELECT share_id FROM place_sources WHERE place_id = ? AND share_id IS NOT NULL").bind(place.id).all<{ share_id: string }>();
+      ids = [...new Set([place.share_id, ...results.map((r) => r.share_id)].filter((x): x is string => !!x))];
+    }
+    const shares = [];
+    for (const id of ids) {
+      const s = await getShare(db, id);
+      if (!s) continue;
+      let attempts: unknown[] = [];
+      try {
+        attempts = s.debug ? JSON.parse(s.debug) : [];
+      } catch {
+        attempts = [];
+      }
+      shares.push({
+        id: s.id,
+        status: s.status,
+        source_url: s.source_url,
+        note: s.note,
+        error: s.error,
+        attempts_count: s.attempts,
+        created_at: s.created_at,
+        updated_at: s.updated_at,
+        stored: { raw_post: s.raw_post?.length ?? 0, raw_transcript: s.raw_transcript?.length ?? 0, transcript: s.transcript?.length ?? 0 },
+        attempts,
+      });
+    }
+    return json({ shares });
   }
 
   if ((m = path.match(/^\/api\/shares\/([\w-]+)\/reread$/)) && method === "POST") {
@@ -482,7 +530,16 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
     const share = await getShare(db, m[1]);
     if (!share) throw new HttpError(404, "Share not found.");
     const body = (await req.json().catch(() => ({}))) as { fresh?: boolean };
-    return json(await rereadShare(env, share, { fresh: body.fresh === true }));
+    const trace = new Trace(body.fresh ? "re-read from Apify" : "re-read");
+    try {
+      const result = await runTraced(trace, () => rereadShare(env, share, { fresh: body.fresh === true }));
+      trace.note("filled in", result.places.map((p) => p.name).join(", ") || "no places");
+      await updateShare(db, share.id, { debug: mergeAttempt(share.debug, trace.attempt("done")) });
+      return json(result);
+    } catch (err) {
+      await updateShare(db, share.id, { debug: mergeAttempt(share.debug, trace.attempt("failed", errorText(err))) });
+      throw err;
+    }
   }
 
   if ((m = path.match(/^\/api\/shares\/([\w-]+)$/)) && method === "DELETE") {
@@ -628,6 +685,6 @@ export default {
     )
       .bind(t - BACKGROUND_GRACE_MS, ...staleCutoffs(t))
       .first<{ id: string }>();
-    if (next) await processShare(env, next.id);
+    if (next) await processShare(env, next.id, { trigger: "every-minute job" });
   },
 } satisfies ExportedHandler<Env>;

@@ -222,6 +222,8 @@ export interface ShareRow {
   source_location: string | null;
   added_by: string | null;
   photo_key: string | null;
+  /** JSON list of processing attempts; see src/trace.ts. */
+  debug: string | null;
 }
 
 export interface PlaceRow {
@@ -272,6 +274,8 @@ export interface PlaceRow {
   refreshed_at: number | null;
   archived_at: number | null;
   archive_reason: ArchiveReason | null;
+  /** 1 when the saved branch stays put instead of switching to the one nearest home. */
+  keep_branch: number;
 }
 
 export const ARCHIVE_REASONS = ["not-for-me", "closed", "too-far", "other"] as const;

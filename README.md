@@ -144,7 +144,8 @@ Install the app from Chrome as in setup step 7. After that, **Reel Eats** appear
 
 - **To try, Visited, All**: the switch at the top filters every view. **Open now** and the category menu next to it narrow further.
 - **Browse**: switch between Categories, Cities and Occasions. "Go soon" collects new openings, pop-ups and limited-time items. The note fades after a few months, since "just opened" stops being true.
-- **Nearest branch**: the detail card says "Closest of 3 locations found". Open **All 3 locations** to switch to another branch.
+- **Nearest branch**: the detail card says "Closest of 3 locations found". Open **All 3 locations** to see every branch Google found and switch to another. A branch you pick stays put when you move house; **Use the closest branch** goes back.
+- **Pop-ups and events**: when a reel is about a pop-up, takeover, seasonal menu or limited-time event, Reel Eats keeps the branch in the reel instead of the one nearest home, since that's where it's happening.
 - **Wrong match**: open **Wrong place?** on the detail card, search Google Maps, and pick the right result.
 - **Tags**: open **Edit details** on a place to add or remove occasions, or change the "go soon" note.
 - **Archive**: for places you've decided against, that closed, or that are too far. Tap **Archive** on a place and optionally pick a reason: Not for me, Closed, Too far or Other. Archived places leave the map, the list, Browse, shared links and the monthly re-check, but keep their rating and notes. Sharing another reel of one doesn't save it again. They're under **Archived** at the bottom of the list, where **Unarchive** puts one back. **Delete** removes a place for good.
@@ -153,7 +154,8 @@ Install the app from Chrome as in setup step 7. After that, **Reel Eats** appear
 - **A partner's own code**: in Settings, under **Partner access**, type their name and tap **Make a code**. They sign in with that code, and it also works in their own iPhone Shortcut. What they save shows "Added by" with their name. They can't see or change partner codes or links. **Turn off** stops a code right away.
 - **Read-only links**: under **Share a read-only list**, pick To try, Visited or All, and optionally one category. Anyone with the link sees those places on a map and list, without your notes, your home address or distances. **Turn off** disables the link.
 - **Google My Maps**: **Google My Maps (KML)** in Settings downloads a file. In Google My Maps, create a map, tap **Import**, and pick it. Each pin has the category, status, tags, reel and Google Maps link, so My Maps can color pins by category.
-- **Backups**: Settings also exports the whole list as CSV or JSON.
+- **Backups**: Settings also exports the whole list as CSV or JSON. Both include every other location found; JSON has each one's address, coordinates, phone and Google Maps link.
+- **Debugging details**: at the bottom of each place, the owner can open a log of every attempt to process the reels behind it: what started it, which outside calls were made (Apify, Instagram, Google, Workers AI, Claude, the cover image), how long each took, what came back, and how it ended. A failed share in "Just shared" has a **Details** button with the same log. **Copy log** copies it as JSON. The last five attempts per reel are kept.
 
 Every minute the Worker also finishes any share whose background job was cut short, so a reel you shared still lands within a minute or two even if you never open the app. Background work gets only 30 seconds on Cloudflare, so when Apify is slow to read a reel, the rest of the work is handed to that job instead of being cut off halfway.
 
@@ -163,6 +165,8 @@ Everything goes into your D1 database:
 
 - the caption, poster, post date, location tag with coordinates, and transcript
 - the raw results from both Apify readers, so reels can be reprocessed later without paying again
+- a log of each attempt to process it, with timings and errors
+- every other location Google found for the place
 - a copy of the cover image, since Instagram's image links stop working after a few days
 - every place the reel led to, with a link back to the reel
 

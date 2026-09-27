@@ -1,5 +1,6 @@
 import { candidate, locationLine } from "./identify";
 import { cleanTags, supportedTags } from "./tags";
+import { currentTrace, errorText } from "./trace";
 import { TAGS, type Env, type ExtractedPlace, type SourceMeta } from "./types";
 
 /** Llama 3.3 70B supports Workers AI's JSON mode and fits many reels a day in the free allowance. */
@@ -143,6 +144,8 @@ export async function extractWithWorkersAI(env: Env, meta: SourceMeta | null, sh
   const text = postText(meta, sharedText);
   if (!text.trim()) return [];
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const t0 = Date.now();
+  const log = (ok: boolean, detail?: string, error?: string) => currentTrace()?.add("workers ai", Date.now() - t0, ok, detail, error);
   try {
     const run = (env.AI as unknown as AiRunner).run(model, {
       messages: [
@@ -156,12 +159,20 @@ export async function extractWithWorkersAI(env: Env, meta: SourceMeta | null, sh
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error(`no answer within ${AI_TIMEOUT_MS / 1000} seconds`)), AI_TIMEOUT_MS);
     });
-    const out = (await Promise.race([run, timeout])) as { response?: unknown };
+    const out = (await Promise.race([run, timeout])) as { response?: unknown; usage?: { completion_tokens?: number; neurons?: number } };
     const places = parseAiPlaces(out?.response, text);
-    if (!places.length && typeof out?.response === "string") console.warn(`Workers AI answer couldn't be read: ${out.response.slice(0, 200)}`);
+    const tokens = out?.usage?.completion_tokens;
+    const usage = tokens != null ? `, ${tokens} tokens, ${Math.round(out?.usage?.neurons ?? 0)} neurons` : "";
+    if (!places.length && typeof out?.response === "string") {
+      console.warn(`Workers AI answer couldn't be read: ${out.response.slice(0, 200)}`);
+      log(false, `answer couldn't be read${usage}`, out.response.slice(0, 200));
+    } else {
+      log(true, `${places.map((p) => p.name).join(", ") || "no venues"}${usage}`);
+    }
     return places;
   } catch (err) {
     console.warn("Workers AI failed; using rules only", err);
+    log(false, undefined, errorText(err));
     return [];
   } finally {
     clearTimeout(timer);

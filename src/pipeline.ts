@@ -21,7 +21,8 @@ import { candidate, captionSummary, dedupe, noteCandidate, ruleCandidates, VENUE
 import { saveImageFromUrl } from "./media";
 import { branchSummary, categoryFor, cuisineFor, PlacesError, placesClient, resolveBranch } from "./places";
 import { emptyMeta, fetchSourceMeta, mapApifyItem } from "./source";
-import { cleanTags, priceTags, ruleGoSoon, ruleTags } from "./tags";
+import { cleanTags, isEventNote, priceTags, ruleGoSoon, ruleTags } from "./tags";
+import { currentTrace, errorText, mergeAttempt, runTraced, Trace, type Attempt } from "./trace";
 import type { ApifyUsage, Engine, Env, ExtractedPlace, Home, PlaceCandidate, PlaceRow, ShareRow, SourceMeta, SourceRow } from "./types";
 import { extractWithWorkersAI } from "./workersai";
 
@@ -67,23 +68,30 @@ export function summarize(
 }
 
 /** Build the fields stored for one place, and pick the nearest branch when possible. */
+/** The stored fields for a place at one branch, with the full branch list. */
+export function branchFields(best: PlaceCandidate, branches: PlaceCandidate[]): Partial<PlaceRow> {
+  return {
+    ...candidateFields(best),
+    branch_count: branches.length,
+    branches: JSON.stringify(branches.map(branchSummary)),
+    refreshed_at: now(),
+  };
+}
+
 export async function locate(
   env: Env,
   extracted: ExtractedPlace,
   home: Home | null,
-): Promise<{ fields: Partial<PlaceRow>; best: PlaceCandidate | null; branches: PlaceCandidate[] }> {
+): Promise<{ fields: Partial<PlaceRow>; best: PlaceCandidate | null; branches: PlaceCandidate[]; filmed: PlaceCandidate | null }> {
   const res = await resolveBranch(placesClient(env), extracted, home);
-  if (!res) return { fields: { located: 0 }, best: null, branches: [] };
-  return {
-    fields: {
-      ...candidateFields(res.best),
-      branch_count: res.branches.length,
-      branches: JSON.stringify(res.branches.map(branchSummary)),
-      refreshed_at: now(),
-    },
-    best: res.best,
-    branches: res.branches,
-  };
+  currentTrace()?.note(
+    "match",
+    res
+      ? `${extracted.name} → ${res.best.name}, ${res.best.address} (${res.branches.length} ${res.branches.length === 1 ? "location" : "locations"})`
+      : `${extracted.name} → nothing on Google Maps${extracted.food_only ? " that serves food or drink" : ""}`,
+  );
+  if (!res) return { fields: { located: 0 }, best: null, branches: [], filmed: null };
+  return { fields: branchFields(res.best, res.branches), best: res.best, branches: res.branches, filmed: res.filmed };
 }
 
 /**
@@ -153,12 +161,14 @@ async function plan(env: Env, share: ShareRow, meta: SourceMeta | null): Promise
     });
     const primary = extraction.places.map((p) => ({ ...p, food_only: false, keep_unresolved: true, category_from_google: p.category === "Other" }));
     applyArea(primary, meta, rules.area);
+    currentTrace()?.note("names to look up", `Claude: ${primary.map((c) => c.name).join(", ") || `none (${extraction.reason})`}`);
     return { primary, fallback: [], reason: extraction.reason, fromClaude: true };
   }
 
   if (share.note) {
     // A typed name wins. If Google can't find it, the post's own clues get a turn.
     const typed = noteCandidate(share.note);
+    currentTrace()?.note("names to look up", `typed: ${typed?.name ?? "none"}; backup: ${[...rules.primary, ...rules.fallback].map((c) => c.name).join(", ") || "none"}`);
     return { primary: typed ? [typed] : [], fallback: [...rules.primary, ...rules.fallback], reason: "", fromClaude: false };
   }
 
@@ -178,6 +188,10 @@ async function plan(env: Env, share: ShareRow, meta: SourceMeta | null): Promise
       fallback: rules.fallback.map((c) => c.name),
     }),
   );
+  currentTrace()?.note(
+    "names to look up",
+    [`AI: ${ai.map((c) => c.name).join(", ") || "none"}`, `rules: ${rules.primary.map((c) => c.name).join(", ") || "none"}`, `backup: ${rules.fallback.map((c) => c.name).join(", ") || "none"}`].join("; "),
+  );
 
   let reason = "";
   if (!meta?.caption && !share.shared_text && share.image_base64) {
@@ -193,6 +207,7 @@ interface Located {
   best: PlaceCandidate | null;
   fields: Partial<PlaceRow>;
   branches: PlaceCandidate[];
+  filmed: PlaceCandidate | null;
 }
 
 /** Look every name up at once; one at a time was too slow to finish in the background. */
@@ -267,22 +282,45 @@ export interface ProcessOptions {
    * stop once it's stored and leave the rest to the next scheduled run, which has minutes.
    */
   deferAfterMs?: number;
+  /** What started this attempt, for the debug log: "background", "waiting", "retry", "app", "every-minute job". */
+  trigger?: string;
 }
 
+/** Process a share, recording every outside call in the share's debug log. */
 export async function processShare(env: Env, shareId: string, opts: ProcessOptions = {}): Promise<SaveResult> {
+  const trace = new Trace(opts.trigger ?? "app");
+  return runTraced(trace, () => processTraced(env, shareId, opts, trace));
+}
+
+async function processTraced(env: Env, shareId: string, opts: ProcessOptions, trace: Trace): Promise<SaveResult> {
   const db = env.DB;
-  const started = Date.now();
   const share = await claimShare(db, shareId);
   if (!share) {
     const current = await getShare(db, shareId);
     return { status: "busy", share: current, places: [], duplicates: [], message: "Already being processed." };
   }
+  const previousLog = share.debug;
+  // Saved part way through too, so an attempt that's cut off still shows how far it got.
+  const saveLog = async (outcome: Attempt["outcome"], error?: string) => {
+    try {
+      await updateShare(db, share.id, { debug: mergeAttempt(previousLog, trace.attempt(outcome, error)) });
+    } catch (err) {
+      console.warn("Couldn't save the debug log", err);
+    }
+  };
+  trace.note("attempt", `number ${share.attempts}${share.note ? `, with the typed name "${share.note}"` : ""}`);
 
   try {
     let meta: SourceMeta | null = storedMeta(share);
+    if (meta) trace.note("reel", `already stored: caption ${meta.caption.length} characters, transcript ${meta.transcript?.length ?? 0}`);
     let photo = keepPhoto(db, share, meta?.thumbnail);
     if (share.source_url && !meta) {
       meta = await fetchSourceMeta(share.source_url, env);
+      trace.note(
+        "reel",
+        `read via ${meta.via}: caption ${meta.caption.length} characters, transcript ${meta.transcript?.length ?? 0}` +
+          `${meta.locationName ? `, tagged "${meta.locationName}"` : ""}${meta.apifyError ? `; ${meta.apifyError}` : ""}`,
+      );
       if (meta.apifyError) await noteApifyProblem(db, meta.apifyError);
       photo = keepPhoto(db, share, meta.thumbnail);
       await updateShare(db, share.id, {
@@ -297,12 +335,15 @@ export async function processShare(env: Env, shareId: string, opts: ProcessOptio
         // The reel is stored now; a retry won't pay Apify again, so it can start sooner.
         claimed_at: Date.now(),
       });
-      if (opts.deferAfterMs && Date.now() - started > opts.deferAfterMs) {
+      if (opts.deferAfterMs && Date.now() - trace.started > opts.deferAfterMs) {
         await photo;
+        trace.note("handed over", `reading the reel took ${Math.round((Date.now() - trace.started) / 1000)} s, so the every-minute job finishes it`);
         await updateShare(db, share.id, { status: "pending", claimed_at: null });
+        await saveLog("handed over");
         return { status: "busy", share: await getShare(db, share.id), places: [], duplicates: [], message: "Saved. Finding the restaurant now." };
       }
     }
+    await saveLog("running");
 
     const home = await getHome(db);
     const { primary, fallback, reason, fromClaude } = await plan(env, share, meta);
@@ -310,6 +351,7 @@ export async function processShare(env: Env, shareId: string, opts: ProcessOptio
     // Look up the clear signals first. Only fall back to @mentions and the poster when those find nothing.
     let located = await locateAll(env, primary, home);
     if (!located.some((l) => l.best) && fallback.length) {
+      trace.note("backup", "nothing found from the post's own clues, so trying tagged accounts, @mentions and the poster");
       located = [...located, ...(await locateAll(env, fallback, home))];
     }
     const anyFound = located.some((l) => l.best);
@@ -320,6 +362,7 @@ export async function processShare(env: Env, shareId: string, opts: ProcessOptio
     if (!keep.length) {
       const why = reason || (fromClaude ? "" : "Couldn't find a restaurant from this post on Google Maps.") || "Couldn't tell which restaurant this is.";
       await updateShare(db, share.id, { status: "failed", error: `${why} Add the name and try again.` });
+      await saveLog("failed", why);
       return {
         status: "failed",
         share: await getShare(db, share.id),
@@ -341,7 +384,9 @@ export async function processShare(env: Env, shareId: string, opts: ProcessOptio
     const duplicates: PlaceRow[] = [];
     const creators: Record<string, number> = {};
     const seenGoogle = new Set<string>();
-    for (const { place: p, best, fields, branches } of keep) {
+    for (const found of keep) {
+      const { place: p, branches, filmed } = found;
+      let { best, fields } = found;
       if (best && seenGoogle.has(best.id)) continue;
       if (best) seenGoogle.add(best.id);
       if (!best && anyFound && !fromClaude) continue;
@@ -350,6 +395,17 @@ export async function processShare(env: Env, shareId: string, opts: ProcessOptio
       // A pop-up or seasonal note from the rules is more specific than AI's "now open".
       const goSoon = (postGoSoon && postGoSoon !== "New opening" ? postGoSoon : "") || p.go_soon || postGoSoon || null;
       const handle = p.instagram_handle || handleFor(best?.name ?? p.name, meta) || null;
+
+      // A pop-up or event happens at the branch in the reel, not at whichever one is nearest home.
+      let keepBranch = 0;
+      if (best && filmed && isEventNote(goSoon)) {
+        keepBranch = 1;
+        if (filmed.id !== best.id) {
+          trace.note("branch", `"${goSoon}" is at the branch in the reel, ${filmed.address}, so that's kept instead of the one nearest home`);
+          best = filmed;
+          fields = branchFields(filmed, branches);
+        }
+      }
 
       const existing = best ? await findPlaceByBranch(db, [best.id, ...branches.map((b) => b.id)]) : await findUnlocatedByName(db, p.name);
       if (existing) {
@@ -363,6 +419,7 @@ export async function processShare(env: Env, shareId: string, opts: ProcessOptio
             instagram_handle: existing.instagram_handle || handle,
           });
         }
+        trace.note("duplicate", `${existing.name} is already on the list${existing.archived_at ? " (archived)" : ""}`);
         duplicates.push(existing);
         continue;
       }
@@ -388,14 +445,17 @@ export async function processShare(env: Env, shareId: string, opts: ProcessOptio
         go_soon: goSoon,
         photo_key: share.photo_key,
         added_by: share.added_by,
+        keep_branch: keepBranch,
         ...fields,
       });
       if (hasSource) await addSource(db, place.id, source);
+      trace.note("saved", `${place.name}${place.located ? `, ${place.address}` : ", without a location"}`);
       saved.push(place);
     }
 
     // The screenshot has served its purpose; don't keep megabytes in the database.
     await updateShare(db, share.id, { status: "done", error: null, image_base64: null });
+    await saveLog("done");
     const units = await getUnits(db);
     return {
       status: "done",
@@ -409,7 +469,9 @@ export async function processShare(env: Env, shareId: string, opts: ProcessOptio
       err instanceof ExtractionError || err instanceof PlacesError
         ? err.message
         : `Something went wrong: ${err instanceof Error ? err.message : String(err)}`;
+    trace.add("error", 0, false, undefined, errorText(err));
     await updateShare(db, share.id, { status: "failed", error: msg });
+    await saveLog("failed", msg);
     return { status: "failed", share: await getShare(db, share.id), places: [], duplicates: [], message: msg };
   }
 }
@@ -492,6 +554,8 @@ export async function recheckPlace(env: Env, place: PlaceRow): Promise<PlaceRow 
     multi_location: !!place.multi_location,
     food_only: false,
   });
+  // A pop-up at a particular branch, or a branch picked by hand, stays where it is.
+  if (place.keep_branch) return place;
   const { fields, best } = await locate(env, extracted, home);
   if (!best) return null;
   return updatePlace(env.DB, place.id, fields);

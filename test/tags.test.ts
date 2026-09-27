@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { cleanTags, priceTags, ruleGoSoon, ruleTags, supportedTags } from "../src/tags";
+import { cleanTags, isEventNote, priceTags, ruleGoSoon, ruleTags, supportedTags } from "../src/tags";
 
 const fixture = (name: string) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"))[0];
 
@@ -63,5 +63,12 @@ describe("the two reels from Sep 27", () => {
   it("keeps an AI tag only when the post's words support it", () => {
     const laCueva = "speakeasy ... the bar even glows ... cave walls, a glowing bar, and even live music. Their drinks were incredible";
     expect(supportedTags(["splurge", "cocktails", "live music", "date night"], laCueva)).toEqual(["cocktails", "live music"]);
+  });
+});
+
+describe("pop-ups and events", () => {
+  it("are tied to one branch; a new opening isn't", () => {
+    for (const n of ["Pop-up", "Pop-up through Oct 12", "Seasonal", "Limited time through 11/30", "Halloween takeover"]) expect(isEventNote(n)).toBe(true);
+    for (const n of ["New opening", "Now open starting September 18", "", null]) expect(isEventNote(n)).toBe(false);
   });
 });

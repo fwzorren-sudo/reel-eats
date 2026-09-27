@@ -1,4 +1,5 @@
 import { distanceMeters, matchesAny, websiteHost } from "./geo";
+import { currentTrace, errorText } from "./trace";
 import type { Category, Env, ExtractedPlace, GeoPoint, Home, OpeningHours, PlaceCandidate, SearchArea } from "./types";
 
 const FIELDS = [
@@ -66,21 +67,34 @@ export class PlacesClient {
     private base = "https://places.googleapis.com",
   ) {}
 
-  private async call(path: string, init: RequestInit, fieldMask: string): Promise<unknown> {
+  private async call(path: string, init: RequestInit, fieldMask: string, label: string): Promise<unknown> {
     if (!this.apiKey) throw new PlacesError("GOOGLE_MAPS_API_KEY is not set on the Worker.");
-    const res = await fetch(`${this.base}${path}`, {
-      ...init,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": this.apiKey,
-        "X-Goog-FieldMask": fieldMask,
-      },
-      signal: AbortSignal.timeout(10000),
-    });
-    const body = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
-    if (!res.ok) {
-      throw new PlacesError(`Google Places error ${res.status}: ${body.error?.message ?? "unknown error"}`);
+    const t0 = Date.now();
+    const step = path.includes("searchText") ? "google search" : "google details";
+    let res: Response;
+    try {
+      res = await fetch(`${this.base}${path}`, {
+        ...init,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Goog-Api-Key": this.apiKey,
+          "X-Goog-FieldMask": fieldMask,
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+    } catch (err) {
+      currentTrace()?.add(step, Date.now() - t0, false, label, errorText(err));
+      throw err;
     }
+    const body = (await res.json().catch(() => ({}))) as { error?: { message?: string }; places?: unknown[] };
+    if (!res.ok) {
+      const message = `Google Places error ${res.status}: ${body.error?.message ?? "unknown error"}`;
+      currentTrace()?.add(step, Date.now() - t0, false, label, message);
+      throw new PlacesError(message);
+    }
+    const n = body.places?.length ?? 0;
+    const found = step === "google search" ? `${n} ${n === 1 ? "result" : "results"}` : "found";
+    currentTrace()?.add(step, Date.now() - t0, true, `${label} → ${found}`);
     return body;
   }
 
@@ -97,16 +111,21 @@ export class PlacesClient {
       const radius = Math.min("radius" in opts.bias ? opts.bias.radius : BIAS_RADIUS_M, BIAS_RADIUS_M);
       body.locationBias = { circle: { center: { latitude: opts.bias.lat, longitude: opts.bias.lng }, radius } };
     }
+    // The log names home rather than its coordinates.
+    const nearHome = opts.bias && opts.home && opts.bias.lat === opts.home.lat && opts.bias.lng === opts.home.lng;
+    const radius = opts.bias && "radius" in opts.bias ? ` within ${Math.round(opts.bias.radius / 1000)} km of` : " near";
+    const where = !opts.bias ? "" : nearHome ? " near home" : `${radius} ${opts.bias.lat.toFixed(4)},${opts.bias.lng.toFixed(4)}`;
     const json = (await this.call(
       "/v1/places:searchText",
       { method: "POST", body: JSON.stringify(body) },
       FIELDS.map((f) => `places.${f}`).join(","),
+      `"${textQuery}"${where}`,
     )) as { places?: RawPlace[] };
     return (json.places ?? []).filter((p) => p.location).map((p) => toCandidate(p, opts.home ?? null));
   }
 
   async details(placeId: string, home: GeoPoint | null): Promise<PlaceCandidate | null> {
-    const json = (await this.call(`/v1/places/${encodeURIComponent(placeId)}`, { method: "GET" }, FIELDS.join(","))) as RawPlace;
+    const json = (await this.call(`/v1/places/${encodeURIComponent(placeId)}`, { method: "GET" }, FIELDS.join(","), placeId)) as RawPlace;
     return json.location ? toCandidate(json, home) : null;
   }
 }
@@ -234,6 +253,8 @@ export interface Resolution {
   best: PlaceCandidate;
   /** Every matching branch, nearest to home first (includes `best`). */
   branches: PlaceCandidate[];
+  /** The branch the reel was filmed at, when the post says where. Kept for pop-ups and events. */
+  filmed: PlaceCandidate | null;
 }
 
 /**
@@ -298,5 +319,12 @@ export async function resolveBranch(client: PlacesClient, place: ExtractedPlace,
   pool = pool.filter((c) => (seen.has(c.id) ? false : (seen.add(c.id), true)));
 
   if (home) pool.sort((a, b) => (a.distanceM ?? Infinity) - (b.distanceM ?? Infinity));
-  return { best: pool[0], branches: pool.slice(0, 12) };
+
+  // With coordinates from the location tag, the filmed branch is the match closest to them.
+  const byFilmed = (c: PlaceCandidate) => (filmed ? distanceMeters(filmed.lat, filmed.lng, c.lat, c.lng) : 0);
+  const filmedBranch = hintMatches.length ? [...hintMatches].sort((a, b) => byFilmed(a) - byFilmed(b))[0] : null;
+  const branches = pool.slice(0, 12);
+  const kept = filmedBranch ? branches.find((b) => b.id === filmedBranch.id) : null;
+  if (filmedBranch && !kept) branches[branches.length - 1] = filmedBranch;
+  return { best: pool[0], branches, filmed: filmedBranch ? (kept ?? filmedBranch) : null };
 }
