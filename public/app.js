@@ -239,21 +239,20 @@ let map, markerLayer, tiles, fitted = false;
 const darkQuery = matchMedia("(prefers-color-scheme: dark)");
 
 function setTiles() {
-  if (tiles) tiles.remove();
-  const style = darkQuery.matches ? "dark_all" : "rastertiles/voyager";
-  tiles = L.tileLayer(`https://{s}.basemaps.cartocdn.com/${style}/{z}/{x}/{y}{r}.png`, {
-    subdomains: "abcd",
-    maxZoom: 20,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+  if (tiles) return;
+  // OpenStreetMap's standard tiles need no key. Dark mode tints them with a CSS filter (see styles.css).
+  tiles = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    className: "osm-tiles",
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   }).addTo(map);
 }
 
 function ensureMap() {
   if (map) return;
-  map = L.map("map", { zoomControl: false, zoomSnap: 0.5 }).setView([39.5, -98.35], 4);
+  map = L.map("map", { zoomControl: false }).setView([39.5, -98.35], 4);
   L.control.zoom({ position: "bottomleft" }).addTo(map);
   setTiles();
-  darkQuery.addEventListener?.("change", setTiles);
   markerLayer = L.layerGroup().addTo(map);
 }
 

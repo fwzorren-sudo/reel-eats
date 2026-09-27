@@ -1,5 +1,5 @@
 /* Offline shell for Reel Eats. API calls always go to the network. */
-const VERSION = "reel-eats-v2";
+const VERSION = "reel-eats-v3";
 const SHELL = [
   "/",
   "/index.html",
@@ -10,7 +10,7 @@ const SHELL = [
   "/vendor/leaflet/leaflet.css",
   "/icons/icon-192.png",
 ];
-const TILE_CACHE = "reel-eats-tiles";
+const TILE_CACHE = "reel-eats-tiles-osm";
 const MAX_TILES = 800;
 
 self.addEventListener("install", (event) => {
@@ -45,7 +45,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (url.hostname.endsWith("basemaps.cartocdn.com")) {
+  if (url.hostname === "tile.openstreetmap.org") {
     event.respondWith(
       caches.open(TILE_CACHE).then(async (cache) => {
         const hit = await cache.match(req);
