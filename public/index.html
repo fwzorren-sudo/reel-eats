@@ -33,13 +33,18 @@
           <button type="button" data-status="visited" aria-pressed="false">Visited</button>
           <button type="button" data-status="all" aria-pressed="false">All</button>
         </div>
+        <button type="button" class="chip" id="open-filter" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          Open now
+        </button>
         <select class="select-chip" id="category-filter" aria-label="Category">
-          <option value="">All categories</option>
+          <option value="">Category</option>
         </select>
       </div>
+      <div class="banner" id="banner" role="status" hidden></div>
     </header>
 
-    <main>
+    <main id="main-views">
       <section class="view" id="view-map" aria-label="Map">
         <div id="map"></div>
         <div class="map-tools">
@@ -48,6 +53,9 @@
           </button>
           <button class="round-btn" type="button" id="home-btn" aria-label="Center on home">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg>
+          </button>
+          <button class="round-btn" type="button" id="me-btn" aria-label="Show where I am">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
           </button>
         </div>
         <div class="map-card" id="map-card" hidden></div>
@@ -66,7 +74,12 @@
         <div id="list"></div>
       </section>
 
-      <section class="view padded" id="view-cats" aria-label="Categories" hidden>
+      <section class="view padded" id="view-cats" aria-label="Browse" hidden>
+        <div class="segmented browse-switch" role="group" aria-label="Browse by">
+          <button type="button" data-browse="cats" aria-pressed="true">Categories</button>
+          <button type="button" data-browse="cities" aria-pressed="false">Cities</button>
+          <button type="button" data-browse="tags" aria-pressed="false">Occasions</button>
+        </div>
         <div id="cats"></div>
       </section>
 
@@ -74,6 +87,10 @@
         <div class="stack" id="settings"></div>
       </section>
     </main>
+
+    <div class="guest-missing" id="guest-missing" hidden>
+      <div class="empty"><h2>This link doesn't work</h2><p></p></div>
+    </div>
 
     <button class="fab" type="button" id="add-btn">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
@@ -91,7 +108,7 @@
       </button>
       <button type="button" data-view="cats">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg>
-        Categories
+        Browse
       </button>
       <button type="button" data-view="settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg>
@@ -110,7 +127,7 @@
       <p>Restaurants from your reels, on one map, with the branch closest to home.</p>
       <label>Access code
         <input type="password" id="login-code" autocomplete="current-password" required />
-        <span class="hint">The APP_TOKEN you set when you deployed. It's stored on this phone only.</span>
+        <span class="hint">The APP_TOKEN you set when you deployed, or a partner code from the list's owner. It's stored on this phone only.</span>
       </label>
       <div class="error-text" id="login-error" hidden></div>
       <button class="btn primary" type="submit">Open my list</button>

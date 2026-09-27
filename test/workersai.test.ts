@@ -42,6 +42,22 @@ describe("extractWithWorkersAI", () => {
   });
 });
 
+describe("tags, go-soon notes and the transcript", () => {
+  it("sends the transcript and keeps only allowed tags", async () => {
+    const { env, calls } = fakeAi({
+      response: {
+        places: [{ name: "Lucali", city: "", cuisine: "", summary: "", dishes: [], tags: ["date night", "romantic vibes", "DATE NIGHT"], go_soon: "New opening" }],
+      },
+    });
+    const out = await extractWithWorkersAI(env, { ...meta, transcript: "Lucali just opened a second spot" }, null);
+    expect(out[0].tags).toEqual(["date night"]);
+    expect(out[0].go_soon).toBe("New opening");
+    expect(calls[0].input.messages[1].content).toContain("Spoken in the video:\nLucali just opened a second spot");
+    const schema = calls[0].input.response_format.json_schema;
+    expect(schema.properties.places.items.properties.tags.items.enum).toContain("coffee date");
+  });
+});
+
 describe("parseAiPlaces", () => {
   it("accepts a JSON string reply and drops empty names", () => {
     const out = parseAiPlaces('Here you go: {"places":[{"name":"Katz\'s","city":"NYC"},{"name":""}]}');

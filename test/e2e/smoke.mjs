@@ -24,6 +24,7 @@ async function call(path, { method = "GET", body, token = CODE } = {}) {
   return { status: res.status, data };
 }
 const byGoogle = (places, id) => places.find((p) => p.google_place_id === id);
+const list = (s) => JSON.parse(s || "[]");
 const step = (name) => console.log(`✓ ${name}`);
 const share = (body) => call("/api/share?wait=1", { method: "POST", body });
 
@@ -45,6 +46,21 @@ assert.equal(p.category, "Tacos & Mexican");
 assert.equal(p.distance_m, null);
 assert.match(r.data.message, /Saved Tacos Del Norte in Queens/);
 step(MODE === "rules" ? "turns an @mention in the caption into the restaurant" : "saves a reel Claude identified");
+
+assert.equal(p.instagram_handle, "tacosdelnorte");
+assert.equal(p.go_soon, "New opening", "from the transcript");
+assert.equal(p.time_zone, "America/New_York");
+assert.equal(JSON.parse(p.hours).periods.length, 7);
+assert.equal(p.posted_at, 1790000000000);
+assert.ok(p.photo_key, "cover image saved");
+let img = await fetch(`${BASE}/api/media/${p.photo_key}`);
+assert.equal(img.status, 200, "images load without the access code, for <img> tags");
+assert.equal(img.headers.get("content-type"), "image/png");
+r = await call("/api/state");
+let share1 = r.data.sources.filter((s) => s.place_id === p.id);
+assert.equal(share1.length, 1);
+assert.equal(share1[0].source_author, "nycfoodie");
+step("keeps the handle, hours, post date, cover image and a 'go soon' note from the transcript");
 
 r = await call("/api/home", { method: "PUT", body: { address: "350 5th Ave, New York" } });
 assert.equal(r.status, 200, JSON.stringify(r.data));
@@ -81,6 +97,17 @@ assert.equal(r.data.status, "duplicate");
 assert.match(r.data.message, /Already on your list: Tacos Del Norte/);
 step("recognises the same reel shared twice");
 
+r = await share({ url: IG("TACOS2") });
+assert.equal(r.data.status, "done", JSON.stringify(r.data));
+assert.equal(r.data.places.length, 0);
+assert.equal(r.data.duplicates[0].google_place_id, "tdn");
+assert.match(r.data.message, /Already on your list: Tacos Del Norte\. Added this reel to it\. 2 creators have recommended it now\./);
+r = await call("/api/state");
+const tdn = byGoogle(r.data.places, "tdn");
+assert.deepEqual(r.data.sources.filter((s) => s.place_id === tdn.id).map((s) => s.source_author), ["nycfoodie", "queenseats"]);
+assert.ok(list(tdn.tags).includes("date night"), tdn.tags);
+step("adds a second creator's reel to a place already saved");
+
 r = await share({ url: IG(`MYSTERY${Date.now()}`) });
 assert.equal(r.data.status, "failed", JSON.stringify(r.data));
 const mysteryId = r.data.share_id;
@@ -90,6 +117,12 @@ r = await call(`/api/shares/${mysteryId}/retry`, { method: "POST", body: { note:
 assert.equal(r.data.status, "done", JSON.stringify(r.data));
 assert.equal(r.data.places[0].google_place_id, "lucali");
 step("asks for a name when the post is unclear, then saves it on retry");
+
+r = await share({ url: IG("FALLBACK") });
+assert.equal(r.data.status, "done", JSON.stringify(r.data));
+assert.equal(r.data.duplicates[0].google_place_id, "lucali");
+assert.equal(r.data.share.source_author, "lucalifan");
+step("falls back to Apify's official scraper when Post Details fails");
 
 r = await share({ text: "Best bagels in the city\n📍 Absolute Bagels, UWS" });
 assert.equal(r.data.status, "done", JSON.stringify(r.data));
@@ -110,7 +143,23 @@ assert.equal(p.name, "Rosetta Bakery");
 assert.equal(p.category, "Bakery & Desserts");
 assert.equal(p.branch_count, 2);
 assert.equal(p.source_author, "atlfoodiesofficial");
-step("saves the Rosetta Bakery reel from a real Apify result");
+assert.equal(p.instagram_handle, "rosettabakery");
+assert.deepEqual(list(p.tags), ["coffee date", "work-friendly", "outdoor seating"]);
+assert.equal(p.go_soon, "New opening");
+assert.equal(new Date(p.posted_at).toISOString(), "2026-09-22T22:08:57.000Z");
+assert.equal(r.data.share.transcript.slice(0, 40), "Atlanta just got a new Italian bakery an");
+assert.equal(JSON.parse(r.data.share.raw_post).code, "DdmxY_iRYKE");
+assert.equal(JSON.parse(r.data.share.source_location).name, "Atlanta, Georgia");
+step("saves the Rosetta Bakery reel from real Apify results, with its transcript and tags");
+
+const rosettaShare = r.data.share_id;
+r = await call(`/api/shares/${rosettaShare}/reread`, { method: "POST" });
+assert.equal(r.status, 200, JSON.stringify(r.data));
+assert.equal(r.data.via, "apify");
+assert.equal(r.data.transcript, true);
+assert.equal(r.data.places.length, 1);
+assert.deepEqual(list(r.data.places[0].tags), ["coffee date", "work-friendly", "outdoor seating"], "re-reading doesn't duplicate tags");
+step("re-reads a saved reel to fill in details collected since");
 
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 r = await call("/api/share", { method: "POST", body: { image_base64: png, image_type: "image/png" } });
@@ -188,5 +237,58 @@ r = await call(`/api/places/${popup.id}`, { method: "DELETE" });
 assert.equal(r.status, 200);
 assert.equal((await call("/api/state")).data.places.length, places.length - 1);
 step("deletes a place");
+
+r = await call(`/api/places/${lucali.id}`, { method: "PATCH", body: { tags: ["date night", "not a tag"], go_soon: "" } });
+assert.deepEqual(list(r.data.place.tags), ["date night"]);
+assert.equal(r.data.place.go_soon, null);
+step("edits tags by hand");
+
+/* ----- a partner's access code ----- */
+r = await call("/api/members", { method: "POST", body: { name: "Sam" } });
+assert.equal(r.status, 200, JSON.stringify(r.data));
+const samCode = r.data.code;
+const samId = r.data.member.id;
+assert.match(samCode, /^[a-z2-9]{4}(-[a-z2-9]{4}){3}$/);
+r = await call("/api/state", { token: samCode });
+assert.deepEqual(r.data.viewer, { role: "member", name: "Sam" });
+r = await call("/api/share?wait=1", { method: "POST", body: { note: "Katz's Delicatessen" }, token: samCode });
+assert.equal(r.data.status, "done", JSON.stringify(r.data));
+assert.equal(r.data.places[0].added_by, "Sam");
+r = await call("/api/members", { token: samCode });
+assert.equal(r.status, 403);
+r = await call("/api/members");
+assert.deepEqual(r.data.members.map((x) => x.name), ["Sam"]);
+assert.equal(r.data.members[0].code_hash, undefined, "the code's hash stays on the server");
+await call(`/api/members/${samId}`, { method: "DELETE" });
+r = await call("/api/state", { token: samCode });
+assert.equal(r.status, 401);
+step("gives a partner their own code, marks their saves, and turns the code off");
+
+/* ----- a read-only link ----- */
+r = await call("/api/links", { method: "POST", body: { label: "Pizza for Alex", status: "all", category: "Pizza" } });
+const token = r.data.link.token;
+let pub = await fetch(`${BASE}/api/public/${token}`).then((x) => x.json());
+assert.equal(pub.label, "Pizza for Alex");
+assert.deepEqual(pub.places.map((x) => x.name).sort(), [MODE === "claude" ? "Joe's Pizza" : "Joe's Pizza Broadway", "L'industrie Pizzeria", "Lucali"]);
+const pubLucali = pub.places.find((x) => x.name === "Lucali");
+for (const key of ["notes", "distance_m", "branches", "added_by"]) assert.equal(pubLucali[key], undefined, `${key} stays private`);
+assert.equal(pubLucali.visit_status, "visited");
+assert.ok(pub.sources.length >= 2);
+assert.equal(pub.home, undefined);
+await call(`/api/links/${token}`, { method: "DELETE" });
+assert.equal((await fetch(`${BASE}/api/public/${token}`)).status, 404);
+step("shares a read-only list without notes, home or distances, and turns the link off");
+
+/* ----- upkeep ----- */
+r = await call("/api/maintenance/refresh", { method: "POST", body: { all: true } });
+assert.equal(r.status, 200, JSON.stringify(r.data));
+assert.ok(r.data.checked >= 5, `checked ${r.data.checked}`);
+assert.deepEqual(r.data.closed, ["Absolute Bagels"]);
+assert.equal(r.data.apify.used, 4.2);
+r = await call("/api/state");
+assert.equal(byGoogle(r.data.places, "abs").business_status, "CLOSED_PERMANENTLY");
+assert.equal(r.data.apify.limit, 5);
+assert.ok(byGoogle(r.data.places, "tdn").refreshed_at > Date.now() - 60000);
+step("re-checks places with Google, spots a permanent closure, and checks Apify credit");
 
 console.log(`\nAll end-to-end checks passed (${MODE}).`);

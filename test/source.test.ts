@@ -100,30 +100,116 @@ describe("Apify", () => {
     });
   });
 
-  it("calls the Instagram Scraper with the reel link and a bearer token", async () => {
-    let seen: { url: string; init: RequestInit } | null = null;
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
-      seen = { url, init };
-      return new Response(JSON.stringify([item]), { status: 200 });
+  /** A fake Apify: each actor answers from `answers`, and every call is recorded. */
+  function fakeApify(answers: Record<string, () => Response>) {
+    const calls: { url: string; init: RequestInit }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit = {}) => {
+      calls.push({ url, init });
+      const actor = Object.keys(answers).find((a) => url.includes(`/acts/${a}/`));
+      if (actor) return answers[actor]();
+      if (url.includes("instagram.com")) return new Response(fixture("ig-embed.html"), { status: 200 });
+      return new Response("not found", { status: 404 });
+    });
+    return calls;
+  }
+  const ok = (body: unknown) => () => new Response(JSON.stringify(body), { status: 200 });
+  const transcript = [{ code: "ABC", title: item.caption, text: "Tacos Del Norte in Queens has the best birria.", userName: "nycfoodie" }];
+
+  it("reads post details and the transcript side by side, with a bearer token and a spending cap", async () => {
+    const calls = fakeApify({
+      "data-slayer~instagram-post-details": ok([{ code: "ABC", caption: { text: item.caption }, user: { username: "nycfoodie" } }]),
+      "apple_yang~instagram-transcripts-scraper": ok(transcript),
     });
     const m = await fetchSourceMeta("https://www.instagram.com/reels/ABC/?igsh=x", env);
     expect(m.via).toBe("apify");
-    expect(seen!.url).toBe("https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?timeout=120&maxItems=3");
-    expect(new Headers(seen!.init.headers).get("authorization")).toBe("Bearer apify-test");
-    expect(JSON.parse(String(seen!.init.body))).toMatchObject({ directUrls: ["https://www.instagram.com/reel/ABC/"], resultsType: "posts", resultsLimit: 1 });
+    expect(m.author).toBe("nycfoodie");
+    expect(m.transcript).toBe("Tacos Del Norte in Queens has the best birria.");
+    expect(JSON.parse(m.rawTranscript!)).toMatchObject({ code: "ABC" });
+    expect(calls.map((c) => c.url.replace(/\?.*/, "")).sort()).toEqual([
+      "https://api.apify.com/v2/acts/apple_yang~instagram-transcripts-scraper/run-sync-get-dataset-items",
+      "https://api.apify.com/v2/acts/data-slayer~instagram-post-details/run-sync-get-dataset-items",
+    ]);
+    const post = calls.find((c) => c.url.includes("post-details"))!;
+    expect(post.url).toContain("maxTotalChargeUsd=0.02");
+    expect(new Headers(post.init.headers).get("authorization")).toBe("Bearer apify-test");
+    expect(JSON.parse(String(post.init.body))).toEqual({ postUrls: ["https://www.instagram.com/reel/ABC/"] });
+    const t = calls.find((c) => c.url.includes("transcripts"))!;
+    expect(JSON.parse(String(t.init.body))).toEqual({ bulkUrls: ["https://www.instagram.com/reel/ABC/"] });
   });
 
-  it("falls back to Instagram's own page when Apify fails", async () => {
-    const urls: string[] = [];
-    vi.stubGlobal("fetch", async (url: string) => {
-      urls.push(url);
-      if (url.includes("apify")) return new Response('{"error":{"type":"not-enough-usage"}}', { status: 402 });
-      return new Response(fixture("ig-embed.html"), { status: 200 });
+  it("falls back to the official Instagram Scraper when Post Details fails", async () => {
+    const calls = fakeApify({
+      "data-slayer~instagram-post-details": () => new Response("boom", { status: 500 }),
+      "apify~instagram-scraper": ok([{ ...item, url: "https://www.instagram.com/p/ABC/" }]),
+      "apple_yang~instagram-transcripts-scraper": ok([]),
+    });
+    const m = await fetchSourceMeta("https://www.instagram.com/reel/ABC/", env);
+    expect(m).toMatchObject({ via: "apify", locationName: "Tacos Del Norte", author: "nycfoodie" });
+    const official = calls.find((c) => c.url.includes("apify~instagram-scraper"))!;
+    expect(JSON.parse(String(official.init.body))).toMatchObject({ directUrls: ["https://www.instagram.com/reel/ABC/"], resultsType: "posts", resultsLimit: 1 });
+    expect(m.transcript).toBeUndefined();
+  });
+
+  it("uses the transcript's copy of the caption when both post readers fail", async () => {
+    fakeApify({
+      "data-slayer~instagram-post-details": ok([]),
+      "apify~instagram-scraper": ok([]),
+      "apple_yang~instagram-transcripts-scraper": ok(transcript),
+    });
+    const m = await fetchSourceMeta("https://www.instagram.com/reel/ABC/", env);
+    expect(m.caption).toBe(item.caption);
+    expect(m.mentions).toEqual(["tacosdelnorte"]);
+    expect(m.transcript).toContain("birria");
+  });
+
+  it("skips the transcript when it's turned off", async () => {
+    const calls = fakeApify({ "data-slayer~instagram-post-details": ok([{ code: "ABC", caption: { text: "x" } }]) });
+    await fetchSourceMeta("https://www.instagram.com/reel/ABC/", { ...env, APIFY_TRANSCRIPTS: "off" });
+    expect(calls.map((c) => c.url)).toHaveLength(1);
+  });
+
+  it("falls back to Instagram's own page and reports when Apify is out of credit", async () => {
+    const calls = fakeApify({
+      "data-slayer~instagram-post-details": () => new Response('{"error":{"type":"not-enough-usage-to-run-paid-actor"}}', { status: 402 }),
+      "apple_yang~instagram-transcripts-scraper": () => new Response('{"error":{"type":"not-enough-usage-to-run-paid-actor"}}', { status: 402 }),
     });
     const m = await fetchSourceMeta("https://www.instagram.com/reel/ABC/", env);
     expect(m.via).toBe("embed");
     expect(m.mentions).toEqual(["tacosdelnorte"]);
-    expect(urls[1]).toBe("https://www.instagram.com/p/ABC/embed/captioned/");
+    expect(m.apifyError).toMatch(/out of monthly credit/);
+    // Out of credit: the official scraper isn't tried, since it would be refused too.
+    expect(calls.some((c) => c.url.includes("apify~instagram-scraper"))).toBe(false);
+    expect(calls.some((c) => c.url === "https://www.instagram.com/p/ABC/embed/captioned/")).toBe(true);
+  });
+});
+
+describe("Apify Post Details, a real result", () => {
+  const items = JSON.parse(fixture("apify-post-details-rosetta.json"));
+  const shared = "https://www.instagram.com/reel/DdmxY_iRYKE/";
+
+  it("is matched to the shared reel by its code", () => {
+    expect(pickApifyItem(items, shared)).toBe(items[0]);
+    expect(pickApifyItem(items, "https://www.instagram.com/reel/OTHER/")).toBeNull();
+  });
+
+  it("maps the caption, poster, collaborator, location with coordinates, date and cover image", () => {
+    const m = mapApifyItem(shared, items[0]);
+    expect(m.author).toBe("atlfoodiesofficial");
+    expect(m.authorFullName).toBe("Atlanta Food & Lifestyle Influencers | Adam & Cole");
+    expect(m.caption).toContain("📍 Rosetta Bakery - 120 High Street, Dunwoody, GA");
+    expect(m.mentions).toEqual(["rosettabakery", "highstreetatl"]);
+    expect(m.tagged).toEqual([{ username: "highstreetatl", fullName: "High Street Atlanta" }]);
+    expect(m.locationName).toBe("Atlanta, Georgia");
+    expect(m.location).toEqual({ name: "Atlanta, Georgia", lat: 33.7566, lng: -84.3889, address: "", city: "" });
+    expect(new Date(m.postedAt!).toISOString()).toBe("2026-09-22T22:08:57.000Z");
+    expect(m.thumbnail).toMatch(/^https:\/\/scontent.*\.jpg/);
+    expect(JSON.parse(m.raw!)).toMatchObject({ code: "DdmxY_iRYKE" });
+  });
+
+  it("pairs with the transcript result for the same reel", () => {
+    const t = JSON.parse(fixture("apify-transcript-rosetta.json"));
+    expect(pickApifyItem(t, shared)).toBe(t[0]);
+    expect(t[0].text).toContain("Rosetta Bakery");
   });
 });
 
@@ -154,8 +240,14 @@ describe("a real Apify result", () => {
     expect(m.caption).toContain("📍 Rosetta Bakery - 120 High Street, Dunwoody, GA");
   });
 
-  it("sends Apify's Reel Scraper the input it expects", () => {
+  it("reads the post date", () => {
+    expect(new Date(mapApifyItem(shared, items[0]).postedAt!).toISOString()).toBe("2026-09-22T22:08:57.000Z");
+  });
+
+  it("sends each actor the input it expects", () => {
     expect(apifyInput("apify~instagram-reel-scraper", shared)).toMatchObject({ username: [shared], resultsLimit: 1 });
     expect(apifyInput("apify~instagram-scraper", shared)).toMatchObject({ directUrls: [shared], resultsType: "posts" });
+    expect(apifyInput("data-slayer~instagram-post-details", shared)).toEqual({ postUrls: [shared] });
+    expect(apifyInput("apple_yang~instagram-transcripts-scraper", shared)).toEqual({ bulkUrls: [shared] });
   });
 });

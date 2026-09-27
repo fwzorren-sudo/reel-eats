@@ -1,13 +1,25 @@
 import {
   candidateFields,
+  findMemberByHash,
   findShareByUrl,
   getHome,
+  getMedia,
   getPlace,
+  getSetting,
   getShare,
+  getShareLink,
   getUnits,
+  insertMember,
   insertShare,
+  insertShareLink,
+  listMembers,
   listOpenShares,
   listPlaces,
+  listShareLinks,
+  listSources,
+  now,
+  revokeMember,
+  revokeShareLink,
   setSetting,
   STALE_CLAIM_MS,
   updatePlace,
@@ -15,13 +27,27 @@ import {
 } from "./db";
 import { distanceMeters } from "./geo";
 import { isSupportedImageType } from "./extract";
-import { engineFor, placesClient, processShare, recheckPlace, summarize } from "./pipeline";
+import { engineFor, placesClient, processShare, recheckPlace, rereadShare, summarize } from "./pipeline";
 import { geocodeHome, PlacesError } from "./places";
 import { canonicalUrl, extractFirstUrl } from "./source";
-import { CATEGORIES, type Env, type Home, type PlaceCandidate, type PlaceRow } from "./types";
+import { cleanTags } from "./tags";
+import { backfillPhotos, checkApifyUsage, DAILY_CRON, refreshPlaces, runDailyUpkeep } from "./upkeep";
+import {
+  CATEGORIES,
+  type ApifyUsage,
+  type Env,
+  type Home,
+  type PlaceCandidate,
+  type PlaceRow,
+  type ShareLinkScope,
+  type SourceRow,
+  type Viewer,
+} from "./types";
 
 /** D1 rows top out at 2 MB, so screenshots are capped a little below that. */
 const MAX_IMAGE_BASE64 = 1_900_000;
+/** The app's Apify credit warning is refreshed this often when the app is open. */
+const APIFY_CHECK_MS = 6 * 3600 * 1000;
 
 class HttpError extends Error {
   constructor(
@@ -42,14 +68,39 @@ async function sha256(s: string): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)));
 }
 
-async function checkAuth(req: Request, env: Env): Promise<void> {
+const hex = (bytes: Uint8Array) => [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+/** The owner signs in with APP_TOKEN. A partner signs in with a code the owner made in Settings. */
+async function checkAuth(req: Request, env: Env): Promise<Viewer> {
   if (!env.APP_TOKEN) throw new HttpError(500, "APP_TOKEN is not set on the Worker. See README.");
   const header = req.headers.get("Authorization") ?? "";
   const given = header.replace(/^Bearer\s+/i, "").trim() || req.headers.get("X-App-Token")?.trim() || "";
+  if (!given) throw new HttpError(401, "Wrong or missing access code.");
   const [a, b] = await Promise.all([sha256(given), sha256(env.APP_TOKEN)]);
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
-  if (diff !== 0 || !given) throw new HttpError(401, "Wrong or missing access code.");
+  if (diff === 0) return { role: "owner", name: null };
+  const member = await findMemberByHash(env.DB, hex(a));
+  if (member) return { role: "member", name: member.name };
+  throw new HttpError(401, "Wrong or missing access code.");
+}
+
+function requireOwner(viewer: Viewer): void {
+  if (viewer.role !== "owner") throw new HttpError(403, "Only the list's owner can change this.");
+}
+
+/** Random, URL-safe and hard to guess. */
+function randomToken(bytes = 18): string {
+  const b = crypto.getRandomValues(new Uint8Array(bytes));
+  return btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** "k7qm-3xda-p9wz-r2hc": easy to read aloud and to type into the Shortcut. */
+function memberCode(): string {
+  const alphabet = "abcdefghjkmnpqrstuvwxyz23456789";
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  const chars = [...b].map((n) => alphabet[n % alphabet.length]).join("");
+  return chars.match(/.{4}/g)!.join("-");
 }
 
 function toBase64(buf: ArrayBuffer): string {
@@ -100,7 +151,7 @@ async function readShareInput(req: Request): Promise<ShareInput> {
   return { text };
 }
 
-async function handleShare(req: Request, env: Env, ctx: ExecutionContext, url: URL): Promise<Response> {
+async function handleShare(req: Request, env: Env, ctx: ExecutionContext, url: URL, viewer: Viewer): Promise<Response> {
   const input = await readShareInput(req);
   const wait = url.searchParams.get("wait") === "1";
   const asText = url.searchParams.get("format") === "text";
@@ -148,7 +199,11 @@ async function handleShare(req: Request, env: Env, ctx: ExecutionContext, url: U
   if (sourceUrl && !note && !imageBase64) {
     const previous = await findShareByUrl(env.DB, sourceUrl);
     if (previous?.status === "done") {
-      const { results } = await env.DB.prepare("SELECT * FROM places WHERE share_id = ?").bind(previous.id).all<PlaceRow>();
+      const { results } = await env.DB.prepare(
+        "SELECT * FROM places WHERE share_id = ? OR id IN (SELECT place_id FROM place_sources WHERE share_id = ?)",
+      )
+        .bind(previous.id, previous.id)
+        .all<PlaceRow>();
       const units = await getUnits(env.DB);
       const home = await getHome(env.DB);
       const msg = results.length ? summarize([], results, units, !!home) : "You already shared this one.";
@@ -171,6 +226,7 @@ async function handleShare(req: Request, env: Env, ctx: ExecutionContext, url: U
     note,
     image_base64: imageBase64,
     image_type: imageType,
+    added_by: viewer.name,
   });
 
   if (wait) {
@@ -199,9 +255,10 @@ async function refreshDistances(env: Env, home: Home): Promise<void> {
     }
     branches = branches.map((b) => withDistance(b, home)).sort((a, b) => (a.distanceM ?? 0) - (b.distanceM ?? 0));
     const nearest = branches[0];
+    // Stored branches don't carry hours, so a switched place gets fresh details from the daily job.
     const fields: Partial<PlaceRow> =
       nearest && nearest.id !== p.google_place_id
-        ? { ...candidateFields(nearest), branches: JSON.stringify(branches) }
+        ? { ...candidateFields(nearest), branches: JSON.stringify(branches), refreshed_at: null }
         : {
             distance_m: Math.round(distanceMeters(home.lat, home.lng, p.lat!, p.lng!)),
             branches: JSON.stringify(branches),
@@ -232,6 +289,11 @@ async function patchPlace(env: Env, place: PlaceRow, body: Record<string, unknow
   if (body.cuisine !== undefined) f.cuisine = text(body.cuisine, 80) || null;
   if (body.summary !== undefined) f.summary = text(body.summary, 300) || null;
   if (body.notes !== undefined) f.notes = text(body.notes, 2000) || null;
+  if (body.go_soon !== undefined) f.go_soon = text(body.go_soon, 80) || null;
+  if (body.tags !== undefined) {
+    if (!Array.isArray(body.tags)) throw new HttpError(400, "Tags must be a list.");
+    f.tags = JSON.stringify(cleanTags(body.tags));
+  }
   if (body.visit_status !== undefined) {
     if (body.visit_status !== "want" && body.visit_status !== "visited") throw new HttpError(400, "Bad visit status.");
     f.visit_status = body.visit_status;
@@ -246,28 +308,134 @@ async function patchPlace(env: Env, place: PlaceRow, body: Record<string, unknow
     const branches: PlaceCandidate[] = JSON.parse(place.branches || "[]");
     const chosen = branches.find((b) => b.id === body.branch_id);
     if (!chosen) throw new HttpError(400, "That branch isn't in the saved list.");
-    Object.assign(f, candidateFields(withDistance(chosen, await getHome(env.DB))));
+    const home = await getHome(env.DB);
+    // Fresh details bring that branch's own hours. The stored copy is the fallback.
+    const fresh = await placesClient(env)
+      .details(chosen.id, home)
+      .catch(() => null);
+    Object.assign(f, candidateFields(fresh ?? withDistance(chosen, home)), { refreshed_at: fresh ? now() : null });
   }
   return updatePlace(env.DB, place.id, f);
 }
 
+const SCOPE_STATUSES = ["want", "visited", "all"] as const;
+
+/** What a read-only link shows. Notes, your home, distances and who added what stay private. */
+function publicPlace(p: PlaceRow) {
+  return {
+    id: p.id,
+    name: p.name,
+    category: p.category,
+    cuisine: p.cuisine,
+    summary: p.summary,
+    dishes: p.dishes,
+    located: p.located,
+    address: p.address,
+    city: p.city,
+    city_hint: p.city_hint,
+    lat: p.lat,
+    lng: p.lng,
+    maps_url: p.maps_url,
+    website: p.website,
+    phone: p.phone,
+    rating: p.rating,
+    rating_count: p.rating_count,
+    price_level: p.price_level,
+    business_status: p.business_status,
+    branch_count: p.branch_count,
+    visit_status: p.visit_status,
+    my_rating: p.my_rating,
+    instagram_handle: p.instagram_handle,
+    tags: p.tags,
+    go_soon: p.go_soon,
+    hours: p.hours,
+    time_zone: p.time_zone,
+    utc_offset: p.utc_offset,
+    photo_key: p.photo_key,
+    source_url: p.source_url,
+    source_author: p.source_author,
+    posted_at: p.posted_at,
+    created_at: p.created_at,
+  };
+}
+
+const publicSource = (s: SourceRow) => ({
+  place_id: s.place_id,
+  source_url: s.source_url,
+  source_author: s.source_author,
+  posted_at: s.posted_at,
+  photo_key: s.photo_key,
+  created_at: s.created_at,
+});
+
+function inScope(p: PlaceRow, scope: ShareLinkScope): boolean {
+  return (scope.status === "all" || p.visit_status === scope.status) && (!scope.category || p.category === scope.category);
+}
+
+async function handlePublic(env: Env, path: string): Promise<Response | null> {
+  let m: RegExpMatchArray | null;
+  if ((m = path.match(/^\/api\/media\/([0-9a-f-]{36})$/))) {
+    const media = await getMedia(env.DB, m[1]);
+    if (!media) return json({ error: "Not found." }, 404);
+    return new Response(media.bytes, {
+      headers: { "Content-Type": media.contentType, "Cache-Control": "public, max-age=31536000, immutable" },
+    });
+  }
+  if ((m = path.match(/^\/api\/public\/([\w-]{16,64})$/))) {
+    const link = await getShareLink(env.DB, m[1]);
+    if (!link) return json({ error: "This link was turned off or never existed." }, 404);
+    const places = (await listPlaces(env.DB)).filter((p) => inScope(p, link.scope));
+    const ids = new Set(places.map((p) => p.id));
+    const sources = (await listSources(env.DB)).filter((s) => ids.has(s.place_id));
+    return json({
+      label: link.label,
+      scope: link.scope,
+      units: await getUnits(env.DB),
+      places: places.map(publicPlace),
+      sources: sources.map(publicSource),
+      categories: CATEGORIES,
+    });
+  }
+  return null;
+}
+
 async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL): Promise<Response> {
-  await checkAuth(req, env);
   const path = url.pathname.replace(/\/+$/, "");
   const method = req.method.toUpperCase();
+  if (method === "GET") {
+    const open = await handlePublic(env, path);
+    if (open) return open;
+  }
+
+  const viewer = await checkAuth(req, env);
   const db = env.DB;
   let m: RegExpMatchArray | null;
 
-  if (path === "/api/ping") return json({ ok: true });
+  if (path === "/api/ping") return json({ ok: true, viewer });
 
   if (path === "/api/state" && method === "GET") {
-    const [home, units, places, shares] = await Promise.all([getHome(db), getUnits(db), listPlaces(db), listOpenShares(db)]);
+    const [home, units, places, shares, sources, apify] = await Promise.all([
+      getHome(db),
+      getUnits(db),
+      listPlaces(db),
+      listOpenShares(db),
+      listSources(db),
+      getSetting<ApifyUsage>(db, "apify_usage"),
+    ]);
+    if (env.APIFY_TOKEN && (!apify || now() - apify.checkedAt > APIFY_CHECK_MS)) {
+      ctx.waitUntil(checkApifyUsage(env).catch(() => undefined));
+    }
     const engine = engineFor(env);
-    const features = { engine, screenshots: engine === "claude", apify: !!env.APIFY_TOKEN };
-    return json({ home, units, places, shares, categories: CATEGORIES, features });
+    const features = {
+      engine,
+      screenshots: engine === "claude",
+      apify: !!env.APIFY_TOKEN,
+      transcripts: !!env.APIFY_TOKEN && (env.APIFY_TRANSCRIPTS ?? "on") !== "off",
+    };
+    return json({ home, units, places, shares, sources, categories: CATEGORIES, features, viewer, apify: env.APIFY_TOKEN ? apify : null });
   }
 
-  if (path === "/api/share" && method === "POST") return handleShare(req, env, ctx, url);
+  if (path === "/api/share" && method === "POST") return handleShare(req, env, ctx, url, viewer);
 
   if ((m = path.match(/^\/api\/shares\/([\w-]+)\/(process|retry)$/)) && method === "POST") {
     const share = await getShare(db, m[1]);
@@ -280,8 +448,15 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
     return json(await processShare(env, share.id));
   }
 
+  if ((m = path.match(/^\/api\/shares\/([\w-]+)\/reread$/)) && method === "POST") {
+    requireOwner(viewer);
+    const share = await getShare(db, m[1]);
+    if (!share) throw new HttpError(404, "Share not found.");
+    return json(await rereadShare(env, share));
+  }
+
   if ((m = path.match(/^\/api\/shares\/([\w-]+)$/)) && method === "DELETE") {
-    await db.prepare("DELETE FROM shares WHERE id = ?").bind(m[1]).run();
+    await db.prepare("DELETE FROM shares WHERE id = ? AND status != 'done'").bind(m[1]).run();
     return json({ ok: true });
   }
 
@@ -290,7 +465,10 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
     if (!place) throw new HttpError(404, "Place not found.");
     if (method === "PATCH") return json({ place: await patchPlace(env, place, (await req.json()) as Record<string, unknown>) });
     if (method === "DELETE") {
-      await db.prepare("DELETE FROM places WHERE id = ?").bind(place.id).run();
+      await db.batch([
+        db.prepare("DELETE FROM place_sources WHERE place_id = ?").bind(place.id),
+        db.prepare("DELETE FROM places WHERE id = ?").bind(place.id),
+      ]);
       return json({ ok: true });
     }
   }
@@ -307,7 +485,7 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
     const home = await getHome(db);
     const chosen = await placesClient(env).details(body.place_id, home);
     if (!chosen) throw new HttpError(404, "Google couldn't find that place.");
-    const fields: Partial<PlaceRow> = { ...candidateFields(chosen) };
+    const fields: Partial<PlaceRow> = { ...candidateFields(chosen), refreshed_at: now() };
     if (!place.located) fields.name = chosen.name;
     return json({ place: await updatePlace(db, place.id, fields) });
   }
@@ -316,7 +494,7 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
     const q = url.searchParams.get("q")?.trim();
     if (!q) throw new HttpError(400, "Type something to search for.");
     const home = await getHome(db);
-    return json({ results: await placesClient(env).textSearch(q, { bias: home, pageSize: 10 }) });
+    return json({ results: await placesClient(env).textSearch(q, { bias: home, home, pageSize: 10 }) });
   }
 
   if (path === "/api/home" && method === "PUT") {
@@ -336,6 +514,55 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
     return json({ units: await getUnits(db) });
   }
 
+  /* ----- owner only: partner codes, read-only links, upkeep ----- */
+
+  if (path === "/api/members") {
+    requireOwner(viewer);
+    if (method === "GET") return json({ members: await listMembers(db) });
+    if (method === "POST") {
+      const body = (await req.json().catch(() => ({}))) as { name?: string };
+      const name = body.name?.trim().slice(0, 40);
+      if (!name) throw new HttpError(400, "Give the code a name, like the person who'll use it.");
+      const code = memberCode();
+      const id = await insertMember(db, name, hex(await sha256(code)));
+      // The code is shown once. Only its hash is stored.
+      return json({ member: { id, name, created_at: now() }, code });
+    }
+  }
+  if ((m = path.match(/^\/api\/members\/([\w-]+)$/)) && method === "DELETE") {
+    requireOwner(viewer);
+    if (!(await revokeMember(db, m[1]))) throw new HttpError(404, "That code doesn't exist.");
+    return json({ ok: true });
+  }
+
+  if (path === "/api/links") {
+    requireOwner(viewer);
+    if (method === "GET") return json({ links: await listShareLinks(db) });
+    if (method === "POST") {
+      const body = (await req.json().catch(() => ({}))) as { label?: string; status?: string; category?: string };
+      const status = (SCOPE_STATUSES as readonly string[]).includes(body.status ?? "") ? (body.status as ShareLinkScope["status"]) : "want";
+      const category = body.category && (CATEGORIES as readonly string[]).includes(body.category) ? body.category : null;
+      const label = body.label?.trim().slice(0, 60) || null;
+      const token = randomToken();
+      await insertShareLink(db, token, label, { status, category });
+      return json({ link: { token, label, scope: { status, category }, created_at: now() } });
+    }
+  }
+  if ((m = path.match(/^\/api\/links\/([\w-]+)$/)) && method === "DELETE") {
+    requireOwner(viewer);
+    if (!(await revokeShareLink(db, m[1]))) throw new HttpError(404, "That link doesn't exist.");
+    return json({ ok: true });
+  }
+
+  if (path === "/api/maintenance/refresh" && method === "POST") {
+    requireOwner(viewer);
+    const body = (await req.json().catch(() => ({}))) as { all?: boolean };
+    const apify = await checkApifyUsage(env);
+    const photos = await backfillPhotos(env);
+    const { checked, closed } = await refreshPlaces(env, 35, body.all ? now() : undefined);
+    return json({ checked, closed, photos, apify });
+  }
+
   throw new HttpError(404, "Not found.");
 }
 
@@ -353,8 +580,16 @@ export default {
     }
   },
 
-  /** Every few minutes, finish shares whose background job was cut short. */
-  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+  /**
+   * Every 10 minutes: finish shares whose background job was cut short.
+   * Once a day: re-check places with Google, keep cover images, and check Apify credit.
+   */
+  async scheduled(controller: ScheduledController, env: Env): Promise<void> {
+    if (controller.cron === DAILY_CRON) {
+      const report = await runDailyUpkeep(env);
+      console.log(JSON.stringify({ upkeep: report }));
+      return;
+    }
     const t = Date.now();
     const { results } = await env.DB.prepare(
       `SELECT id FROM shares

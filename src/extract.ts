@@ -5,7 +5,9 @@ import type {
   BetaMessageParam,
   BetaToolUnion,
 } from "@anthropic-ai/sdk/resources/beta/messages/messages";
-import { CATEGORIES, type Category, type Env, type Extraction, type ExtractedPlace, type SourceMeta } from "./types";
+import { locationLine } from "./identify";
+import { cleanTags } from "./tags";
+import { CATEGORIES, TAGS, type Category, type Env, type Extraction, type ExtractedPlace, type SourceMeta } from "./types";
 
 export class ExtractionError extends Error {}
 
@@ -26,7 +28,7 @@ export function isSupportedImageType(t: string): t is ImageType {
 
 const SYSTEM = `You help one person keep a list of restaurants, cafes, bars and food spots they saw on social media, so they can find them on a map later.
 
-You receive whatever was shared from their phone: a link to a post or reel, the caption and author when they could be fetched, the post's location tag, a note the person typed, and sometimes a screenshot. Work out which food or drink venues the post is recommending, then call the save_places tool exactly once.
+You receive whatever was shared from their phone: a link to a post or reel, the caption and author when they could be fetched, the post's location tag, a transcript of what is said in the video, a note the person typed, and sometimes a screenshot. Work out which food or drink venues the post is recommending, then call the save_places tool exactly once.
 
 How to decide:
 - The person's note is the strongest signal. If it names a place, use it.
@@ -48,7 +50,9 @@ Fields:
 - summary: one short sentence on why the post says it's worth visiting.
 - dishes: dishes or drinks the post highlights. Can be empty.
 - multi_location: true if the business is a chain or has more than one location.
-- confidence: high, medium or low.`;
+- confidence: high, medium or low.
+- tags: occasions the post says the venue suits, from the allowed list only. Empty if the post doesn't say.
+- go_soon: a few words if the post says the venue just opened, is a pop-up, or has something seasonal or for a limited time, like "New opening" or "Pop-up through Oct 12". Empty otherwise.`;
 
 const SAVE_TOOL: BetaToolUnion = {
   name: "save_places",
@@ -74,10 +78,12 @@ const SAVE_TOOL: BetaToolUnion = {
             dishes: { type: "array", items: { type: "string" } },
             multi_location: { type: "boolean" },
             confidence: { type: "string", enum: ["high", "medium", "low"] },
+            tags: { type: "array", items: { type: "string", enum: [...TAGS] } },
+            go_soon: { type: "string" },
           },
           required: [
             "name", "alt_names", "search_query", "city", "address_hint", "instagram_handle",
-            "category", "cuisine", "summary", "dishes", "multi_location", "confidence",
+            "category", "cuisine", "summary", "dishes", "multi_location", "confidence", "tags", "go_soon",
           ],
           additionalProperties: false,
         },
@@ -93,8 +99,9 @@ function buildUserContent(input: ExtractionInput): BetaContentBlockParam[] {
   const lines: string[] = ["<shared_post>"];
   if (input.url) lines.push(`<link>${input.url}</link>`);
   if (input.meta?.author) lines.push(`<author>${input.meta.author}</author>`);
-  if (input.meta?.locationName) lines.push(`<location_tag>${input.meta.locationName}</location_tag>`);
+  if (input.meta?.locationName) lines.push(`<location_tag>${locationLine(input.meta)}</location_tag>`);
   if (input.meta?.caption) lines.push(`<caption>\n${input.meta.caption}\n</caption>`);
+  if (input.meta?.transcript) lines.push(`<transcript>\n${input.meta.transcript}\n</transcript>`);
   if (input.sharedText) lines.push(`<shared_text>\n${input.sharedText}\n</shared_text>`);
   if (input.url && !input.meta?.caption) lines.push("<note_to_assistant>The caption could not be fetched.</note_to_assistant>");
   lines.push("</shared_post>");
@@ -135,6 +142,8 @@ export function sanitizeExtraction(raw: unknown): Extraction {
       dishes: strList(p.dishes, 8),
       multi_location: p.multi_location === true,
       confidence,
+      tags: cleanTags(Array.isArray(p.tags) ? p.tags : []),
+      go_soon: str(p.go_soon, 80),
     });
   }
   return { places, reason: str(obj.reason, 400) };

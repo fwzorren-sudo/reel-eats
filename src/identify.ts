@@ -1,4 +1,8 @@
-import type { ExtractedPlace, SourceMeta } from "./types";
+import type { ExtractedPlace, SearchArea, SourceMeta } from "./types";
+
+/** How far around a tagged venue, and around a tagged city, to look on Google Maps. */
+export const VENUE_RADIUS_M = 1500;
+export const CITY_RADIUS_M = 30000;
 
 /**
  * Rule-based venue finding. No AI involved: it collects names the post itself points at,
@@ -94,6 +98,12 @@ export function noteCandidate(note: string): ExtractedPlace | null {
   });
 }
 
+/** "Rosetta Bakery (120 High St, Dunwoody, Georgia)" */
+export function locationLine(meta: SourceMeta): string {
+  const extra = [meta.location?.address, meta.location?.city].filter(Boolean).join(", ");
+  return extra ? `${meta.locationName} (${extra})` : meta.locationName;
+}
+
 /** First sentence of the caption, without hashtags or @mentions, for the place's summary. */
 export function captionSummary(caption: string): string {
   const firstLine =
@@ -118,6 +128,8 @@ export interface RuleCandidates {
   fallback: ExtractedPlace[];
   /** A location tag like "Brooklyn, New York" says where, not which venue. */
   cityHint: string;
+  /** The area around the location tag's coordinates, to search every name in. */
+  area: SearchArea | null;
 }
 
 export function ruleCandidates(meta: SourceMeta | null, sharedText: string | null): RuleCandidates {
@@ -129,10 +141,20 @@ export function ruleCandidates(meta: SourceMeta | null, sharedText: string | nul
   for (const pin of pinnedPlaces(text)) primary.push(candidate(pin.name, { address_hint: pin.where }));
 
   const tag = meta?.locationName?.trim() ?? "";
+  const loc = meta?.location ?? null;
+  const isCity = tag.includes(",") && !loc?.address;
   if (tag) {
-    if (tag.includes(",")) cityHint = tag;
-    else primary.push(candidate(tag));
+    if (isCity) cityHint = tag;
+    else {
+      primary.push(
+        candidate(tag, {
+          address_hint: [loc?.address, loc?.city].filter(Boolean).join(", "),
+          near: loc ? { lat: loc.lat, lng: loc.lng, radius: VENUE_RADIUS_M } : null,
+        }),
+      );
+    }
   }
+  const area = loc ? { lat: loc.lat, lng: loc.lng, radius: CITY_RADIUS_M } : null;
 
   for (const t of meta?.tagged ?? []) {
     fallback.push(candidate(t.fullName || handleToName(t.username), { alt_names: [t.username], instagram_handle: t.username }));
@@ -149,8 +171,11 @@ export function ruleCandidates(meta: SourceMeta | null, sharedText: string | nul
     );
   }
 
-  for (const c of [...primary, ...fallback]) if (!c.city && !c.address_hint && cityHint) c.city = cityHint;
-  return { primary: dedupe(primary), fallback: dedupe(fallback).slice(0, 5), cityHint };
+  for (const c of [...primary, ...fallback]) {
+    if (!c.city && !c.address_hint && cityHint) c.city = cityHint;
+    c.near ??= area;
+  }
+  return { primary: dedupe(primary), fallback: dedupe(fallback).slice(0, 5), cityHint, area };
 }
 
 export function dedupe(list: ExtractedPlace[]): ExtractedPlace[] {

@@ -1,7 +1,8 @@
-// Stand-ins for the Anthropic API, Google Places and a reel page, for local end-to-end runs.
+// Stand-ins for the Anthropic API, Google Places, Apify and a reel page, for local end-to-end runs.
 // Usage: node test/e2e/mock-upstreams.mjs [port]
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
+import zlib from "node:zlib";
 
 const port = Number(process.argv[2] || 8799);
 
@@ -24,11 +25,20 @@ const P = (id, name, lat, lng, extra = {}) => ({
     { longText: extra.city || "New York", shortText: extra.city || "New York", types: ["locality"] },
     { longText: "New York", shortText: "NY", types: ["administrative_area_level_1"] },
   ],
+  ...(extra.hours ? { regularOpeningHours: extra.hours, timeZone: { id: extra.tz || "America/New_York" }, utcOffsetMinutes: -240 } : {}),
+  ...(extra.status ? { businessStatus: extra.status } : {}),
 });
+
+// Open 11am to 10pm every day.
+const DAILY = {
+  openNow: true,
+  periods: [0, 1, 2, 3, 4, 5, 6].map((day) => ({ open: { day, hour: 11, minute: 0 }, close: { day, hour: 22, minute: 0 } })),
+  weekdayDescriptions: ["Monday: 11:00 AM – 10:00 PM", "Tuesday: 11:00 AM – 10:00 PM", "Wednesday: 11:00 AM – 10:00 PM", "Thursday: 11:00 AM – 10:00 PM", "Friday: 11:00 AM – 10:00 PM", "Saturday: 11:00 AM – 10:00 PM", "Sunday: 11:00 AM – 10:00 PM"],
+};
 
 const PLACES = {
   home: P("home", "350 5th Ave", 40.7484, -73.9857, { address: "350 5th Ave, New York, NY 10118, USA", type: "street_address", typeLabel: "Address" }),
-  tdn: P("tdn", "Tacos Del Norte", 40.7466, -73.8913, { address: "84-12 Roosevelt Ave, Queens, NY 11372", city: "Queens", price: "PRICE_LEVEL_INEXPENSIVE", type: "mexican_restaurant", typeLabel: "Mexican Restaurant" }),
+  tdn: P("tdn", "Tacos Del Norte", 40.7466, -73.8913, { address: "84-12 Roosevelt Ave, Queens, NY 11372", city: "Queens", price: "PRICE_LEVEL_INEXPENSIVE", type: "mexican_restaurant", typeLabel: "Mexican Restaurant", hours: DAILY }),
   ss_msp: P("ss_msp", "Shake Shack Madison Square Park", 40.7414, -73.9882, { website: "https://shakeshack.com/location/madison-square-park", address: "Madison Ave & E 23rd St, New York, NY 10010", type: "hamburger_restaurant", typeLabel: "Hamburger Restaurant" }),
   ss_hs: P("ss_hs", "Shake Shack Herald Square", 40.7503, -73.988, { website: "https://shakeshack.com/location/herald-square", address: "1333 Broadway, New York, NY 10018", type: "hamburger_restaurant", typeLabel: "Hamburger Restaurant" }),
   ss_gc: P("ss_gc", "Shake Shack Grand Central", 40.7527, -73.9772, { website: "https://shakeshack.com/location/grand-central", address: "87 E 42nd St, New York, NY 10017", type: "hamburger_restaurant", typeLabel: "Hamburger Restaurant" }),
@@ -41,7 +51,11 @@ const PLACES = {
   rb_high: P("rb_high", "Rosetta Bakery", 33.9296, -84.344, { address: "120 High St, Dunwoody, GA 30346", city: "Dunwoody", website: "https://www.rosettabakery.com/", type: "bakery", typeLabel: "Bakery" }),
   rb_west: P("rb_west", "Rosetta Bakery", 33.787, -84.412, { address: "1100 Howell Mill Rd, Atlanta, GA 30318", city: "Atlanta", website: "https://www.rosettabakery.com/", type: "bakery", typeLabel: "Bakery" }),
   gk: P("gk", "Grandma's Kitchen", 40.7306, -73.9866, { address: "10 E 14th St, New York, NY 10003", type: "american_restaurant", typeLabel: "American Restaurant" }),
+  katz: P("katz", "Katz's Delicatessen", 40.7223, -73.9874, { address: "205 E Houston St, New York, NY 10002", type: "sandwich_shop", typeLabel: "Deli", hours: DAILY }),
 };
+
+// Google's details for these say the place has since closed for good.
+const CLOSED_SINCE = new Set(["abs"]);
 
 const SEARCH = {
   "350 5th Ave, New York": ["home"],
@@ -69,10 +83,50 @@ const SEARCH = {
   "Rosetta Bakery": ["rb_west", "rb_high"],
   "Rosetta Bakery 120 High Street, Dunwoody, GA": ["rb_high"],
   "Rosetta Bakery Dunwoody, GA": ["rb_high"],
+  "Katz's Delicatessen": ["katz"],
 };
 
-// A real result from Apify, used as-is.
-const ROSETTA = JSON.parse(readFileSync(new URL("../fixtures/apify-rosetta.json", import.meta.url), "utf8"))[0];
+// Real results from Apify, used as-is.
+const fixture = (name) => JSON.parse(readFileSync(new URL(`../fixtures/${name}`, import.meta.url), "utf8"))[0];
+const ROSETTA = fixture("apify-rosetta.json");
+const ROSETTA_POST = fixture("apify-post-details-rosetta.json");
+const ROSETTA_TRANSCRIPT = fixture("apify-transcript-rosetta.json");
+
+/** A small gradient PNG, a different color per reel, served as each reel's cover image. */
+function coverImage(seed) {
+  const w = 90, h = 120;
+  const hue = [...seed].reduce((n, c) => n + c.charCodeAt(0), 0) % 360;
+  const rgb = (l) => {
+    const c = (1 - Math.abs(2 * l - 1)) * 0.7, x = c * (1 - Math.abs(((hue / 60) % 2) - 1)), m = l - c / 2;
+    const [r, g, b] = hue < 60 ? [c, x, 0] : hue < 120 ? [x, c, 0] : hue < 180 ? [0, c, x] : hue < 240 ? [0, x, c] : hue < 300 ? [x, 0, c] : [c, 0, x];
+    return [r + m, g + m, b + m].map((v) => Math.round(v * 255));
+  };
+  const rows = [];
+  for (let y = 0; y < h; y++) {
+    const row = Buffer.alloc(1 + w * 3);
+    const [r, g, b] = rgb(0.35 + (0.35 * y) / h);
+    for (let x = 0; x < w; x++) row.set([r, g, b], 1 + x * 3);
+    rows.push(row);
+  }
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(zlib.crc32(body));
+    return Buffer.concat([len, body, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr.set([8, 2, 0, 0, 0], 8);
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", zlib.deflateSync(Buffer.concat(rows))),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
 
 // What Apify's Instagram Scraper returns for each test reel, by shortcode.
 const REELS = {
@@ -84,7 +138,38 @@ const REELS = {
     locationName: "",
   },
   MYSTERY: { ownerUsername: "randomeats", caption: "Unreal dinner last night 🤤", locationName: "" },
+  // A second creator recommending a place that's already saved.
+  TACOS2: { ownerUsername: "queenseats", caption: "Date night at @tacosdelnorte, the birria is unreal", locationName: "" },
+  // Post Details fails for this one, so the official scraper is used.
+  FALLBACK: { ownerUsername: "lucalifan", caption: "📍 Lucali, Carroll Gardens. Worth the wait.", locationName: "" },
 };
+
+// What's said in each test reel.
+const TRANSCRIPTS = {
+  TACOS1: "This taqueria in Queens just opened and the birria tacos are unreal.",
+  DdmxY_iRYKE: ROSETTA_TRANSCRIPT,
+};
+
+const codeOf = (u) => (u || "").match(/\/(?:reel|p)\/([A-Za-z0-9_-]+)/)?.[1] || "";
+const reelFor = (code) => REELS[code.replace(/\d+$/, "") === "MYSTERY" ? "MYSTERY" : code];
+const image = (code) => `http://127.0.0.1:${port}/img/${code}.png`;
+
+/** Apify Post Details returns Instagram's own media object. */
+function postDetails(code) {
+  if (code === "DdmxY_iRYKE") return { ...ROSETTA_POST, thumbnail_url: image(code) };
+  const r = reelFor(code);
+  if (!r || code === "FALLBACK") return null;
+  return {
+    code,
+    taken_at: 1790000000,
+    caption: { text: r.caption, mentions: [] },
+    user: { username: r.ownerUsername, full_name: r.ownerFullName || "" },
+    location: r.locationName ? { name: r.locationName, lat: 40.7414, lng: -73.9882, address: "Madison Ave & E 23rd St", city: "New York" } : null,
+    tagged_users: [],
+    coauthor_producers: [],
+    thumbnail_url: image(code),
+  };
+}
 
 const venue = (name, category, city, extra = {}) => ({
   name,
@@ -107,6 +192,7 @@ function decide(text, hasImage) {
   if (t.includes("rosetta bakery")) return { places: [venue("Rosetta Bakery", "Bakery & Desserts", "Dunwoody, GA", { cuisine: "Italian bakery", multi: true })], reason: "" };
   if (t.includes("absolute bagels")) return { places: [venue("Absolute Bagels", "Bakery & Desserts", "New York, NY", { cuisine: "Bagels" })], reason: "" };
   if (t.includes("tsujita")) return { places: [venue("Tsujita LA", "Ramen & Noodles", "Los Angeles, CA", { cuisine: "Tsukemen" })], reason: "" };
+  if (t.includes("katz")) return { places: [venue("Katz's Delicatessen", "Sandwiches & Deli", "New York, NY", { cuisine: "Pastrami" })], reason: "" };
   if (t.includes("grandma")) return { places: [venue("Grandma's Kitchen Pop-up", "Other", "", {})], reason: "" };
   if (t.includes("mystery")) return { places: [], reason: "The caption only shows a plate of food with no venue name, tag or location." };
   if (t.includes("tacosdelnorte") || t.includes("tacos del norte")) {
@@ -157,13 +243,39 @@ const server = createServer(async (req, res) => {
     });
   }
 
-  if (req.method === "POST" && url.pathname === "/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items") {
+  const actor = url.pathname.match(/^\/v2\/acts\/([\w~.-]+)\/run-sync-get-dataset-items$/)?.[1];
+  if (req.method === "POST" && actor) {
     if (req.headers.authorization !== "Bearer test-apify") return send(res, 401, { error: { type: "token-not-valid" } });
     const body = JSON.parse(raw);
-    const code = (body.directUrls?.[0] || "").match(/\/(?:reel|p)\/([A-Za-z0-9_-]+)/)?.[1] || "";
-    const reel = code === "DdmxY_iRYKE" ? ROSETTA : REELS[code.replace(/\d+$/, "") === "MYSTERY" ? "MYSTERY" : code];
-    console.log(`[apify] ${body.directUrls?.[0]} -> ${reel ? code : "none"}`);
-    return send(res, 200, reel ? [{ url: body.directUrls[0], shortCode: code, displayUrl: `https://example.com/${code}.jpg`, ...reel }] : []);
+    const link = body.postUrls?.[0] || body.bulkUrls?.[0] || body.directUrls?.[0] || "";
+    const code = codeOf(link);
+    let out = [];
+    if (actor === "data-slayer~instagram-post-details") {
+      if (code === "FALLBACK") return send(res, 500, { error: { message: "mock: post details failed" } });
+      const item = postDetails(code);
+      out = item ? [item] : [];
+    } else if (actor === "apple_yang~instagram-transcripts-scraper") {
+      const t = TRANSCRIPTS[code];
+      out = !t ? [] : typeof t === "string" ? [{ url: link, code, text: t, title: reelFor(code)?.caption || "" }] : [t];
+    } else if (actor === "apify~instagram-scraper") {
+      const reel = code === "DdmxY_iRYKE" ? ROSETTA : reelFor(code);
+      out = reel ? [{ url: link, shortCode: code, displayUrl: image(code), ...reel }] : [];
+    }
+    console.log(`[apify] ${actor} ${link} -> ${out.length ? code : "none"}`);
+    return send(res, 200, out);
+  }
+
+  if (req.method === "GET" && url.pathname === "/v2/users/me/limits") {
+    if (req.headers.authorization !== "Bearer test-apify") return send(res, 401, { error: { type: "token-not-valid" } });
+    return send(res, 200, {
+      data: { monthlyUsageCycle: { endAt: "2026-10-22T23:59:59.999Z" }, limits: { maxMonthlyUsageUsd: 5 }, current: { monthlyUsageUsd: 4.2 } },
+    });
+  }
+
+  if (req.method === "GET" && url.pathname.startsWith("/img/")) {
+    const png = coverImage(url.pathname);
+    res.writeHead(200, { "Content-Type": "image/png", "Content-Length": png.length });
+    return res.end(png);
   }
 
   if (req.method === "GET" && url.pathname === "/blog/ramen") {
@@ -184,7 +296,8 @@ const server = createServer(async (req, res) => {
   const detail = url.pathname.match(/^\/v1\/places\/([\w-]+)$/);
   if (req.method === "GET" && detail) {
     const p = PLACES[detail[1]];
-    return p ? send(res, 200, p) : send(res, 404, { error: { message: "Not found" } });
+    if (!p) return send(res, 404, { error: { message: "Not found" } });
+    return send(res, 200, CLOSED_SINCE.has(p.id) ? { ...p, businessStatus: "CLOSED_PERMANENTLY" } : p);
   }
 
   if (req.method === "GET" && url.pathname.startsWith("/reel/")) {

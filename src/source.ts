@@ -1,4 +1,4 @@
-import type { Env, SourceMeta } from "./types";
+import type { ApifyUsage, Env, SourceMeta } from "./types";
 
 const BROWSER_UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1";
@@ -169,12 +169,28 @@ export function parseOpenGraph(html: string): Parsed {
 
 /* ---------- Apify ---------- */
 
+export const POST_ACTOR = "data-slayer~instagram-post-details";
+export const FALLBACK_ACTOR = "apify~instagram-scraper";
+export const TRANSCRIPT_ACTOR = "apple_yang~instagram-transcripts-scraper";
+
+interface ApifyUser {
+  username?: string;
+  full_name?: string;
+  fullName?: string;
+}
+
+/**
+ * One result from an Apify Instagram actor. The official scraper returns flat fields
+ * (ownerUsername, locationName); Post Details returns Instagram's own media object
+ * (user.username, caption.text, location with coordinates).
+ */
 interface ApifyItem {
   url?: string;
   inputUrl?: string;
   shortCode?: string;
   shortcode?: string;
-  caption?: string;
+  code?: string;
+  caption?: string | { text?: string; mentions?: string[] } | null;
   caption_text?: string;
   text?: string;
   ownerUsername?: string;
@@ -182,81 +198,195 @@ interface ApifyItem {
   ownerFullName?: string;
   owner_full_name?: string;
   owner?: { username?: string; fullName?: string; full_name?: string };
+  user?: ApifyUser;
   locationName?: string;
   location_name?: string;
-  location?: { name?: string } | null;
+  location?: { name?: string; lat?: number; lng?: number; address?: string; city?: string } | null;
   mentions?: string[];
   hashtags?: string[];
-  taggedUsers?: { username?: string; full_name?: string; fullName?: string }[];
-  tagged_users?: { username?: string; full_name?: string; fullName?: string }[];
-  coauthorProducers?: { username?: string; full_name?: string; fullName?: string }[];
+  taggedUsers?: (ApifyUser & { user?: ApifyUser })[];
+  tagged_users?: (ApifyUser & { user?: ApifyUser })[];
+  coauthorProducers?: ApifyUser[];
+  coauthor_producers?: ApifyUser[];
   displayUrl?: string;
+  thumbnail_url?: string;
+  timestamp?: string;
+  taken_at?: number;
   error?: string;
   errorDescription?: string;
 }
 
-export function mapApifyItem(url: string, item: ApifyItem): SourceMeta {
-  const people = [...(item.taggedUsers ?? item.tagged_users ?? []), ...(item.coauthorProducers ?? [])];
-  const tagged = people
+/** One result from the transcript actor. `title` is the caption. */
+interface TranscriptItem {
+  url?: string;
+  code?: string;
+  title?: string;
+  text?: string;
+  createTime?: number;
+  userName?: string;
+  userFullName?: string;
+  errMsg?: string;
+  error?: string;
+}
+
+const people = (list: (ApifyUser & { user?: ApifyUser })[] | undefined) =>
+  (list ?? [])
+    .map((u) => u.user ?? u)
     .filter((u) => u.username)
     .map((u) => ({ username: u.username!.toLowerCase(), fullName: (u.full_name || u.fullName || "").trim() }));
-  const author = item.ownerUsername || item.owner_username || item.owner?.username || "";
-  return finish(
+
+export function mapApifyItem(url: string, item: ApifyItem): SourceMeta {
+  const tagged = [...people(item.taggedUsers ?? item.tagged_users), ...people(item.coauthorProducers ?? item.coauthor_producers)];
+  const author = item.ownerUsername || item.owner_username || item.owner?.username || item.user?.username || "";
+  const captionObj = item.caption && typeof item.caption === "object" ? item.caption : null;
+  const caption = (typeof item.caption === "string" ? item.caption : captionObj?.text) || item.caption_text || item.text || "";
+  const loc = item.location;
+  const location =
+    loc && typeof loc.lat === "number" && typeof loc.lng === "number"
+      ? { name: loc.name ?? "", lat: loc.lat, lng: loc.lng, address: loc.address ?? "", city: loc.city ?? "" }
+      : null;
+  const postedAt = item.taken_at ? item.taken_at * 1000 : item.timestamp ? Date.parse(item.timestamp) || null : null;
+  const meta = finish(
     url,
     {
       author,
-      authorFullName: item.ownerFullName || item.owner_full_name || item.owner?.fullName || item.owner?.full_name || "",
-      caption: (item.caption || item.caption_text || item.text || "").slice(0, 4000),
-      locationName: item.locationName || item.location_name || item.location?.name || "",
-      thumbnail: item.displayUrl || "",
+      authorFullName:
+        item.ownerFullName || item.owner_full_name || item.owner?.fullName || item.owner?.full_name || item.user?.full_name || "",
+      caption: caption.slice(0, 4000),
+      locationName: item.locationName || item.location_name || loc?.name || "",
+      thumbnail: item.thumbnail_url || item.displayUrl || "",
     },
     "apify",
-    { mentions: (item.mentions ?? []).map((m) => m.replace(/^@/, "").toLowerCase()), tagged },
+    { mentions: [...(item.mentions ?? []), ...(captionObj?.mentions ?? [])].map((m) => m.replace(/^@/, "").toLowerCase()), tagged },
   );
+  return { ...meta, location, postedAt, raw: JSON.stringify(item) };
 }
+
+const codeOf = (i: ApifyItem & TranscriptItem) =>
+  i.shortCode || i.shortcode || i.code || instagramParts(i.url ?? "")?.code || instagramParts(i.inputUrl ?? "")?.code || "";
 
 /**
  * Some scrapers treat a link as "this account" and return its newest reel instead.
  * Only accept a result that is the reel that was shared, when the result says which one it is.
  */
-export function pickApifyItem(items: unknown, url: string): ApifyItem | null {
+export function pickApifyItem<T extends ApifyItem | TranscriptItem>(items: unknown, url: string): T | null {
   if (!Array.isArray(items)) return null;
   const code = instagramParts(url)?.code;
-  const usable = (items as ApifyItem[]).filter((i) => i && !i.error);
-  const codeOf = (i: ApifyItem) =>
-    i.shortCode || i.shortcode || instagramParts(i.url ?? "")?.code || instagramParts(i.inputUrl ?? "")?.code || "";
+  const usable = (items as T[]).filter((i) => i && !i.error && !(i as TranscriptItem).errMsg);
   const match = usable.find((i) => code && codeOf(i) === code);
   if (match) return match;
-  const unlabeled = usable.find((i) => !codeOf(i));
-  return unlabeled ?? null;
+  return usable.find((i) => !codeOf(i)) ?? null;
 }
 
 export function apifyInput(actor: string, url: string): Record<string, unknown> {
+  if (/post-details/i.test(actor)) return { postUrls: [url] };
+  if (/transcript/i.test(actor)) return { bulkUrls: [url] };
   // Apify's Reel Scraper takes `username`; the Instagram Scraper and most others take `directUrls`.
   if (/reel-scraper/i.test(actor)) return { username: [url], directUrls: [url], resultsLimit: 1 };
   return { directUrls: [url], resultsType: "posts", resultsLimit: 1, addParentData: false };
 }
 
-/** Run an Apify Instagram scraper on one reel and wait for the result. */
-export async function fetchViaApify(env: Env, url: string): Promise<SourceMeta | null> {
+export interface ActorRun {
+  items: unknown;
+  /** Set when Apify refused the run because the account is out of credit. */
+  creditError?: string;
+}
+
+/** Run one Apify actor and wait for its results. Each run has a spending cap. */
+export async function runActor(env: Env, actor: string, url: string, maxChargeUsd: number): Promise<ActorRun | null> {
   const base = env.APIFY_BASE_URL || "https://api.apify.com";
-  const actor = (env.APIFY_ACTOR || "apify~instagram-scraper").replace("/", "~");
+  const id = actor.replace("/", "~");
   try {
-    const res = await fetch(`${base}/v2/acts/${actor}/run-sync-get-dataset-items?timeout=120&maxItems=3`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${env.APIFY_TOKEN}`, "Content-Type": "application/json" },
-      body: JSON.stringify(apifyInput(actor, url)),
-      signal: AbortSignal.timeout(130_000),
-    });
+    const res = await fetch(
+      `${base}/v2/acts/${id}/run-sync-get-dataset-items?timeout=120&maxItems=3&maxTotalChargeUsd=${maxChargeUsd}`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${env.APIFY_TOKEN}`, "Content-Type": "application/json" },
+        body: JSON.stringify(apifyInput(id, url)),
+        signal: AbortSignal.timeout(130_000),
+      },
+    );
     if (!res.ok) {
-      console.warn(`Apify returned ${res.status}: ${(await res.text()).slice(0, 300)}`);
+      const body = (await res.text()).slice(0, 400);
+      console.warn(`Apify ${id} returned ${res.status}: ${body}`);
+      if (res.status === 402 || /usage|credit|insufficient|payment/i.test(body)) {
+        return { items: [], creditError: `Apify refused to run ${id}: out of monthly credit.` };
+      }
       return null;
     }
-    const item = pickApifyItem(await res.json(), url);
-    if (!item) console.warn(`Apify didn't return ${url}; falling back to Instagram's page`);
-    return item ? mapApifyItem(url, item) : null;
+    return { items: await res.json() };
   } catch (err) {
-    console.warn("Apify request failed", err);
+    console.warn(`Apify ${id} request failed`, err);
+    return null;
+  }
+}
+
+/**
+ * Read a reel through Apify. Post Details and the transcript run side by side;
+ * the official Instagram Scraper is the fallback when Post Details fails.
+ */
+export async function fetchViaApify(env: Env, url: string): Promise<SourceMeta | null> {
+  const postActor = env.APIFY_POST_ACTOR || POST_ACTOR;
+  const fallbackActor = env.APIFY_ACTOR || FALLBACK_ACTOR;
+  const transcripts = (env.APIFY_TRANSCRIPTS ?? "on") !== "off";
+
+  const transcriptRun = transcripts ? runActor(env, env.APIFY_TRANSCRIPT_ACTOR || TRANSCRIPT_ACTOR, url, 0.03) : Promise.resolve(null);
+  let creditError: string | undefined;
+
+  let item: ApifyItem | null = null;
+  if (postActor !== "off") {
+    const run = await runActor(env, postActor, url, 0.02);
+    creditError = run?.creditError;
+    item = run ? pickApifyItem<ApifyItem>(run.items, url) : null;
+  }
+  if (!item && !creditError) {
+    const run = await runActor(env, fallbackActor, url, 0.02);
+    creditError = run?.creditError;
+    item = run ? pickApifyItem<ApifyItem>(run.items, url) : null;
+  }
+
+  const tRun = await transcriptRun;
+  creditError ||= tRun?.creditError;
+  const t = tRun ? pickApifyItem<TranscriptItem>(tRun.items, url) : null;
+
+  // The transcript result also carries the caption, so it can stand in for a failed post read.
+  const meta = item
+    ? mapApifyItem(url, item)
+    : t?.title
+      ? { ...mapApifyItem(url, { caption: t.title, ownerUsername: t.userName, ownerFullName: t.userFullName }), raw: null, postedAt: t.createTime ? t.createTime * 1000 : null }
+      : null;
+  if (!meta) {
+    if (!item) console.warn(`Apify didn't return ${url}; falling back to Instagram's page`);
+    return creditError ? { ...emptyMeta(url), apifyError: creditError } : null;
+  }
+  if (t?.text?.trim()) {
+    meta.transcript = t.text.trim().slice(0, 6000);
+    meta.rawTranscript = JSON.stringify(t);
+  }
+  if (creditError) meta.apifyError = creditError;
+  return meta;
+}
+
+/** How much of this month's Apify credit is used. */
+export async function fetchApifyUsage(env: Env): Promise<Omit<ApifyUsage, "checkedAt" | "blocked"> | null> {
+  if (!env.APIFY_TOKEN) return null;
+  const base = env.APIFY_BASE_URL || "https://api.apify.com";
+  try {
+    const res = await fetch(`${base}/v2/users/me/limits`, {
+      headers: { Authorization: `Bearer ${env.APIFY_TOKEN}` },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    const { data } = (await res.json()) as {
+      data?: { monthlyUsageCycle?: { endAt?: string }; limits?: { maxMonthlyUsageUsd?: number }; current?: { monthlyUsageUsd?: number } };
+    };
+    if (typeof data?.current?.monthlyUsageUsd !== "number") return null;
+    return {
+      used: Math.round(data.current.monthlyUsageUsd * 1000) / 1000,
+      limit: data.limits?.maxMonthlyUsageUsd ?? 0,
+      resetsAt: data.monthlyUsageCycle?.endAt ?? "",
+    };
+  } catch {
     return null;
   }
 }
@@ -269,6 +399,39 @@ async function getText(url: string, ua: string): Promise<{ status: number; url: 
   });
   const body = res.ok ? await res.text() : "";
   return { status: res.status, url: res.url || url, body };
+}
+
+/** Instagram's own pages: the embed page first, then the link-preview tags. */
+async function readInstagramPage(canonical: string, code: string): Promise<SourceMeta> {
+  let best: SourceMeta = emptyMeta(canonical);
+  try {
+    const embed = await getText(`https://www.instagram.com/p/${code}/embed/captioned/`, BROWSER_UA);
+    if (embed.body) best = finish(canonical, parseInstagramEmbed(embed.body), "embed");
+  } catch {
+    /* fall through */
+  }
+  if (!best.caption) {
+    try {
+      const page = await getText(canonical, PREVIEW_UA);
+      if (page.body) {
+        const og = parseOpenGraph(page.body);
+        best = finish(
+          canonical,
+          {
+            author: best.author || og.author,
+            authorFullName: og.authorFullName,
+            caption: og.caption,
+            locationName: best.locationName || parseInstagramEmbed(page.body).locationName,
+            thumbnail: best.thumbnail || og.thumbnail,
+          },
+          og.caption ? "preview" : best.via,
+        );
+      }
+    } catch {
+      /* give up quietly */
+    }
+  }
+  return best;
 }
 
 /**
@@ -291,39 +454,16 @@ export async function fetchSourceMeta(rawUrl: string, env?: Env): Promise<Source
   const ig = instagramParts(url);
   if (ig) {
     const canonical = `https://www.instagram.com/${ig.kind}/${ig.code}/`;
+    let viaApify: SourceMeta | null = null;
     if (env?.APIFY_TOKEN) {
-      const viaApify = await fetchViaApify(env, canonical);
+      viaApify = await fetchViaApify(env, canonical);
       if (viaApify && (viaApify.caption || viaApify.locationName)) return viaApify;
     }
-    let best: SourceMeta = emptyMeta(canonical);
-    try {
-      const embed = await getText(`https://www.instagram.com/p/${ig.code}/embed/captioned/`, BROWSER_UA);
-      if (embed.body) best = finish(canonical, parseInstagramEmbed(embed.body), "embed");
-    } catch {
-      /* fall through */
-    }
-    if (!best.caption) {
-      try {
-        const page = await getText(canonical, PREVIEW_UA);
-        if (page.body) {
-          const og = parseOpenGraph(page.body);
-          best = finish(
-            canonical,
-            {
-              author: best.author || og.author,
-              authorFullName: og.authorFullName,
-              caption: og.caption,
-              locationName: best.locationName || parseInstagramEmbed(page.body).locationName,
-              thumbnail: best.thumbnail || og.thumbnail,
-            },
-            og.caption ? "preview" : best.via,
-          );
-        }
-      } catch {
-        /* give up quietly */
-      }
-    }
-    return best;
+    const best = await readInstagramPage(canonical, ig.code);
+    // Keep what Apify did get, such as the transcript, alongside the page's caption.
+    return viaApify
+      ? { ...best, transcript: viaApify.transcript, rawTranscript: viaApify.rawTranscript, apifyError: viaApify.apifyError }
+      : best;
   }
 
   if (/tiktok\.com\//i.test(url)) {

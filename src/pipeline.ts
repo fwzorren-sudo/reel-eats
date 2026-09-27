@@ -1,21 +1,31 @@
 import {
+  addSource,
   candidateFields,
   claimShare,
+  countCreators,
   findPlaceByBranch,
   findUnlocatedByName,
   getHome,
+  getSetting,
   getShare,
   getUnits,
   insertPlace,
+  now,
+  setSetting,
   updatePlace,
   updateShare,
 } from "./db";
 import { ExtractionError, extractPlaces } from "./extract";
-import { candidate, captionSummary, dedupe, noteCandidate, ruleCandidates } from "./identify";
-import { categoryFor, cuisineFor, PlacesClient, PlacesError, resolveBranch } from "./places";
-import { fetchSourceMeta } from "./source";
-import type { Engine, Env, ExtractedPlace, Home, PlaceCandidate, PlaceRow, ShareRow, SourceMeta } from "./types";
+import { namesMatch } from "./geo";
+import { candidate, captionSummary, dedupe, noteCandidate, ruleCandidates, VENUE_RADIUS_M } from "./identify";
+import { saveImageFromUrl } from "./media";
+import { branchSummary, categoryFor, cuisineFor, PlacesError, placesClient, resolveBranch } from "./places";
+import { emptyMeta, fetchSourceMeta, mapApifyItem } from "./source";
+import { cleanTags, priceTags, ruleGoSoon, ruleTags } from "./tags";
+import type { ApifyUsage, Engine, Env, ExtractedPlace, Home, PlaceCandidate, PlaceRow, ShareRow, SourceMeta, SourceRow } from "./types";
 import { extractWithWorkersAI } from "./workersai";
+
+export { placesClient };
 
 export interface SaveResult {
   status: "done" | "failed" | "busy";
@@ -25,10 +35,6 @@ export interface SaveResult {
   message: string;
 }
 
-export function placesClient(env: Env): PlacesClient {
-  return new PlacesClient(env.GOOGLE_MAPS_API_KEY, env.PLACES_BASE_URL || undefined);
-}
-
 export function formatDistance(m: number | null | undefined, units: "mi" | "km"): string {
   if (m == null) return "";
   if (units === "km") return m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`;
@@ -36,7 +42,13 @@ export function formatDistance(m: number | null | undefined, units: "mi" | "km")
   return `${mi.toFixed(mi < 10 ? 1 : 0)} mi`;
 }
 
-export function summarize(places: PlaceRow[], duplicates: PlaceRow[], units: "mi" | "km", hasHome: boolean): string {
+export function summarize(
+  places: PlaceRow[],
+  duplicates: PlaceRow[],
+  units: "mi" | "km",
+  hasHome: boolean,
+  creators: Record<string, number> = {},
+): string {
   const describe = (p: PlaceRow) => {
     if (!p.located) return `${p.name} (location not found yet)`;
     const d = formatDistance(p.distance_m, units);
@@ -46,6 +58,9 @@ export function summarize(places: PlaceRow[], duplicates: PlaceRow[], units: "mi
   if (places.length === 1) parts.push(`Saved ${describe(places[0])}.`);
   else if (places.length > 1) parts.push(`Saved ${places.length} places: ${places.map((p) => p.name).join(", ")}.`);
   if (duplicates.length) parts.push(`Already on your list: ${duplicates.map((p) => p.name).join(", ")}.`);
+  const more = duplicates.filter((p) => (creators[p.id] ?? 0) > 1);
+  if (more.length === 1) parts.push(`Added this reel to it. ${creators[more[0].id]} creators have recommended it now.`);
+  else if (more.length > 1) parts.push("Added this reel to each of them.");
   return parts.join(" ") || "Nothing new to save.";
 }
 
@@ -61,7 +76,8 @@ export async function locate(
     fields: {
       ...candidateFields(res.best),
       branch_count: res.branches.length,
-      branches: JSON.stringify(res.branches),
+      branches: JSON.stringify(res.branches.map(branchSummary)),
+      refreshed_at: now(),
     },
     best: res.best,
     branches: res.branches,
@@ -92,6 +108,13 @@ export function engineFor(env: Env): Engine {
   return "rules";
 }
 
+/** The restaurant's own Instagram account, when the post tags or mentions it. */
+export function handleFor(name: string, meta: SourceMeta | null): string {
+  if (!meta || !name) return "";
+  const handles = [...meta.tagged.map((t) => t.username), ...meta.mentions, meta.author].filter(Boolean);
+  return handles.find((h) => namesMatch(name, h)) ?? "";
+}
+
 interface Plan {
   primary: ExtractedPlace[];
   fallback: ExtractedPlace[];
@@ -99,9 +122,25 @@ interface Plan {
   fromClaude: boolean;
 }
 
+/**
+ * Point each name at where the reel was filmed. A name that matches a venue-level
+ * location tag is searched right at the tag; everything else in the surrounding area.
+ */
+function applyArea(list: ExtractedPlace[], meta: SourceMeta | null, area: ReturnType<typeof ruleCandidates>["area"]): void {
+  const loc = meta?.location;
+  const venueTag = loc?.address ? (meta?.locationName ?? "") : "";
+  for (const c of list) {
+    if (c.near) continue;
+    if (venueTag && loc && namesMatch(venueTag, c.name)) c.near = { lat: loc.lat, lng: loc.lng, radius: VENUE_RADIUS_M };
+    else c.near = area;
+  }
+}
+
 /** Decide which names to look up on Google Maps, strongest signals first. */
 async function plan(env: Env, share: ShareRow, meta: SourceMeta | null): Promise<Plan> {
   const engine = engineFor(env);
+  const rules = ruleCandidates(meta, share.shared_text);
+
   if (engine === "claude") {
     const extraction = await extractPlaces(env, {
       url: share.source_url,
@@ -111,10 +150,10 @@ async function plan(env: Env, share: ShareRow, meta: SourceMeta | null): Promise
       image: share.image_base64 && share.image_type ? { base64: share.image_base64, mediaType: share.image_type } : null,
     });
     const primary = extraction.places.map((p) => ({ ...p, food_only: false, keep_unresolved: true, category_from_google: p.category === "Other" }));
+    applyArea(primary, meta, rules.area);
     return { primary, fallback: [], reason: extraction.reason, fromClaude: true };
   }
 
-  const rules = ruleCandidates(meta, share.shared_text);
   if (share.note) {
     // A typed name wins. If Google can't find it, the post's own clues get a turn.
     const typed = noteCandidate(share.note);
@@ -123,13 +162,16 @@ async function plan(env: Env, share: ShareRow, meta: SourceMeta | null): Promise
 
   const ai = engine === "workers-ai" ? await extractWithWorkersAI(env, meta, share.shared_text) : [];
   for (const c of ai) if (!c.city && rules.cityHint) c.city = rules.cityHint;
+  applyArea(ai, meta, rules.area);
   const primary = dedupe([...ai, ...rules.primary]);
   // Shows up in Cloudflare's Worker logs; handy when a reel lands on the wrong place.
   console.log(
     JSON.stringify({
       share: share.id,
       via: meta?.via ?? "none",
-      ai: ai.map((c) => c.name),
+      transcript: meta?.transcript?.length ?? 0,
+      location: meta?.location ? `${meta.locationName} @ ${meta.location.lat},${meta.location.lng}` : meta?.locationName || "",
+      ai: ai.map((c) => ({ name: c.name, tags: c.tags, go_soon: c.go_soon })),
       rules: rules.primary.map((c) => c.name),
       fallback: rules.fallback.map((c) => c.name),
     }),
@@ -160,6 +202,58 @@ async function locateAll(env: Env, list: ExtractedPlace[], home: Home | null): P
   return out;
 }
 
+/** A share processed before already has the reel's details stored. Rebuild them instead of paying Apify again. */
+export function storedMeta(share: ShareRow): SourceMeta | null {
+  if (!share.source_url || (!share.raw_post && !share.source_caption)) return null;
+  let meta: SourceMeta = emptyMeta(share.source_url);
+  if (share.raw_post) {
+    try {
+      meta = mapApifyItem(share.source_url, JSON.parse(share.raw_post));
+    } catch {
+      /* fall back to the stored caption */
+    }
+  }
+  if (!meta.caption) {
+    meta = {
+      ...meta,
+      author: meta.author || share.source_author || "",
+      caption: share.source_caption ?? "",
+      thumbnail: meta.thumbnail || share.source_thumb || "",
+      via: meta.via === "none" ? "embed" : meta.via,
+    };
+  }
+  meta.transcript = share.transcript ?? undefined;
+  meta.postedAt ??= share.posted_at;
+  return meta;
+}
+
+/** Remember that Apify ran out of credit, so the app can say so. */
+async function noteApifyProblem(db: D1Database, message: string): Promise<void> {
+  const usage = (await getSetting<ApifyUsage>(db, "apify_usage")) ?? { used: 0, limit: 0, resetsAt: "", checkedAt: 0 };
+  await setSetting(db, "apify_usage", { ...usage, blocked: message, checkedAt: now() });
+}
+
+function sourceFields(share: ShareRow, meta: SourceMeta | null): Omit<SourceRow, "id" | "place_id" | "created_at"> {
+  return {
+    share_id: share.id,
+    source_url: meta?.url ?? share.source_url,
+    source_author: meta?.author || null,
+    source_caption: (meta?.caption || share.shared_text || "").slice(0, 4000) || null,
+    posted_at: meta?.postedAt ?? share.posted_at ?? null,
+    photo_key: share.photo_key,
+    added_by: share.added_by,
+  };
+}
+
+export const parseList = (s: string | null | undefined): string[] => {
+  try {
+    const v = s ? JSON.parse(s) : [];
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+};
+
 export async function processShare(env: Env, shareId: string): Promise<SaveResult> {
   const db = env.DB;
   const share = await claimShare(db, shareId);
@@ -169,13 +263,21 @@ export async function processShare(env: Env, shareId: string): Promise<SaveResul
   }
 
   try {
-    let meta: SourceMeta | null = null;
-    if (share.source_url) {
+    let meta: SourceMeta | null = storedMeta(share);
+    let photo: Promise<string | null> = Promise.resolve(share.photo_key);
+    if (share.source_url && !meta) {
       meta = await fetchSourceMeta(share.source_url, env);
+      if (meta.apifyError) await noteApifyProblem(db, meta.apifyError);
+      if (!share.photo_key) photo = saveImageFromUrl(db, meta.thumbnail);
       await updateShare(db, share.id, {
         source_author: meta.author || null,
         source_caption: meta.caption || null,
         source_thumb: meta.thumbnail || null,
+        raw_post: meta.raw ?? null,
+        raw_transcript: meta.rawTranscript ?? null,
+        transcript: meta.transcript || null,
+        posted_at: meta.postedAt ?? null,
+        source_location: meta.location ? JSON.stringify({ ...meta.location, name: meta.locationName }) : null,
       });
     }
 
@@ -190,6 +292,10 @@ export async function processShare(env: Env, shareId: string): Promise<SaveResul
     const anyFound = located.some((l) => l.best);
     const keep = located.filter((l) => l.best || l.place.keep_unresolved);
 
+    const photoKey = await photo;
+    if (photoKey && photoKey !== share.photo_key) await updateShare(db, share.id, { photo_key: photoKey });
+    share.photo_key = photoKey;
+
     if (!keep.length) {
       const why = reason || (fromClaude ? "" : "Couldn't find a restaurant from this post on Google Maps.") || "Couldn't tell which restaurant this is.";
       await updateShare(db, share.id, { status: "failed", error: `${why} Add the name and try again.` });
@@ -202,38 +308,68 @@ export async function processShare(env: Env, shareId: string): Promise<SaveResul
       };
     }
 
+    // Tags and "go soon" notes read from the whole post only fit when it's about one place.
+    const postText = [meta?.caption, meta?.transcript, share.shared_text].filter(Boolean).join("\n");
+    const single = new Set(keep.map((l) => l.best?.id ?? l.place.name)).size === 1;
+    const postTags = single ? ruleTags(postText) : [];
+    const postGoSoon = single ? ruleGoSoon(postText) : "";
+    const source = sourceFields(share, meta);
+    const hasSource = !!(source.source_url || source.source_caption);
+
     const saved: PlaceRow[] = [];
     const duplicates: PlaceRow[] = [];
+    const creators: Record<string, number> = {};
     const seenGoogle = new Set<string>();
     for (const { place: p, best, fields, branches } of keep) {
       if (best && seenGoogle.has(best.id)) continue;
       if (best) seenGoogle.add(best.id);
       if (!best && anyFound && !fromClaude) continue;
+      const category = best && p.category_from_google ? categoryFor(best, p.cuisine) : p.category;
+      const tags = cleanTags(p.tags, postTags, priceTags(best?.priceLevel, category));
+      const goSoon = p.go_soon || postGoSoon || null;
+      const handle = p.instagram_handle || handleFor(best?.name ?? p.name, meta) || null;
+
       const existing = best ? await findPlaceByBranch(db, [best.id, ...branches.map((b) => b.id)]) : await findUnlocatedByName(db, p.name);
       if (existing) {
+        // Another reel recommending a place already saved: keep it with the place.
+        if (hasSource && (await addSource(db, existing.id, source))) {
+          creators[existing.id] = await countCreators(db, existing.id);
+          await updatePlace(db, existing.id, {
+            tags: JSON.stringify(cleanTags(parseList(existing.tags), tags)),
+            go_soon: existing.go_soon || goSoon,
+            photo_key: existing.photo_key || share.photo_key,
+            instagram_handle: existing.instagram_handle || handle,
+          });
+        }
         duplicates.push(existing);
         continue;
       }
-      const category = best && p.category_from_google ? categoryFor(best, p.cuisine) : p.category;
+
       // Claude names the business well. Otherwise Google's name beats a handle or a location tag.
       const name = fromClaude || !best ? p.name : businessName(best, branches);
-      saved.push(
-        await insertPlace(db, {
-          share_id: share.id,
-          name,
-          category,
-          cuisine: p.cuisine || (best ? cuisineFor(best) : "") || null,
-          summary: p.summary || captionSummary(meta?.caption || share.shared_text || "") || null,
-          dishes: JSON.stringify(p.dishes),
-          search_query: fromClaude || !best ? p.search_query : name,
-          city_hint: p.address_hint || p.city || null,
-          multi_location: p.multi_location || branches.length > 1 ? 1 : 0,
-          source_url: meta?.url ?? share.source_url,
-          source_author: meta?.author || null,
-          source_caption: meta?.caption || share.shared_text || null,
-          ...fields,
-        }),
-      );
+      const place = await insertPlace(db, {
+        share_id: share.id,
+        name,
+        category,
+        cuisine: p.cuisine || (best ? cuisineFor(best) : "") || null,
+        summary: p.summary || captionSummary(meta?.caption || share.shared_text || "") || null,
+        dishes: JSON.stringify(p.dishes),
+        search_query: fromClaude || !best ? p.search_query : name,
+        city_hint: p.address_hint || p.city || null,
+        multi_location: p.multi_location || branches.length > 1 ? 1 : 0,
+        source_url: meta?.url ?? share.source_url,
+        source_author: meta?.author || null,
+        source_caption: meta?.caption || share.shared_text || null,
+        instagram_handle: handle,
+        posted_at: meta?.postedAt ?? null,
+        tags: JSON.stringify(tags),
+        go_soon: goSoon,
+        photo_key: share.photo_key,
+        added_by: share.added_by,
+        ...fields,
+      });
+      if (hasSource) await addSource(db, place.id, source);
+      saved.push(place);
     }
 
     // The screenshot has served its purpose; don't keep megabytes in the database.
@@ -244,7 +380,7 @@ export async function processShare(env: Env, shareId: string): Promise<SaveResul
       share: await getShare(db, share.id),
       places: saved,
       duplicates,
-      message: summarize(saved, duplicates, units, !!home),
+      message: summarize(saved, duplicates, units, !!home, creators),
     };
   } catch (err) {
     const msg =
@@ -254,6 +390,61 @@ export async function processShare(env: Env, shareId: string): Promise<SaveResul
     await updateShare(db, share.id, { status: "failed", error: msg });
     return { status: "failed", share: await getShare(db, share.id), places: [], duplicates: [], message: msg };
   }
+}
+
+/**
+ * Read a reel again with the current readers and fill in what the saved places are missing:
+ * the transcript and raw results, cover image, Instagram account, post date, tags and "go soon".
+ * For reels saved before these were collected. The places themselves aren't looked up again.
+ */
+export async function rereadShare(env: Env, share: ShareRow): Promise<{ via: string; transcript: boolean; places: PlaceRow[] }> {
+  const db = env.DB;
+  if (!share.source_url) return { via: "none", transcript: false, places: [] };
+  const meta = await fetchSourceMeta(share.source_url, env);
+  if (meta.apifyError) await noteApifyProblem(db, meta.apifyError);
+  const photoKey = share.photo_key || (await saveImageFromUrl(db, meta.thumbnail || share.source_thumb));
+  await updateShare(db, share.id, {
+    source_author: meta.author || share.source_author,
+    source_caption: meta.caption || share.source_caption,
+    source_thumb: meta.thumbnail || share.source_thumb,
+    raw_post: meta.raw ?? share.raw_post,
+    raw_transcript: meta.rawTranscript ?? share.raw_transcript,
+    transcript: meta.transcript || share.transcript,
+    posted_at: meta.postedAt ?? share.posted_at,
+    source_location: meta.location ? JSON.stringify({ ...meta.location, name: meta.locationName }) : share.source_location,
+    photo_key: photoKey,
+  });
+  const fresh = { ...share, photo_key: photoKey, posted_at: meta.postedAt ?? share.posted_at };
+
+  const { results: places } = await db.prepare("SELECT * FROM places WHERE share_id = ?").bind(share.id).all<PlaceRow>();
+  const text = [meta.caption, meta.transcript, share.shared_text].filter(Boolean).join("\n");
+  const single = places.length === 1;
+  const ai = engineFor(env) === "workers-ai" ? await extractWithWorkersAI(env, meta, share.shared_text) : [];
+  const source = sourceFields(fresh, meta);
+  const updated: PlaceRow[] = [];
+  for (const p of places) {
+    const match = ai.find((a) => namesMatch(p.name, a.name) || namesMatch(a.name, p.name));
+    const tags = cleanTags(parseList(p.tags), match?.tags, single ? ruleTags(text) : [], priceTags(p.price_level, p.category));
+    const row = await updatePlace(db, p.id, {
+      tags: JSON.stringify(tags),
+      go_soon: p.go_soon || match?.go_soon || (single ? ruleGoSoon(text) : "") || null,
+      instagram_handle: p.instagram_handle || match?.instagram_handle || handleFor(p.name, meta) || null,
+      posted_at: p.posted_at ?? source.posted_at,
+      photo_key: p.photo_key || photoKey,
+    });
+    if (source.source_url || source.source_caption) {
+      await addSource(db, p.id, source);
+      await db
+        .prepare(
+          `UPDATE place_sources SET photo_key = coalesce(photo_key, ?), posted_at = coalesce(posted_at, ?), source_author = coalesce(source_author, ?)
+           WHERE place_id = ? AND source_url = ?`,
+        )
+        .bind(source.photo_key, source.posted_at, source.source_author, p.id, source.source_url)
+        .run();
+    }
+    if (row) updated.push(row);
+  }
+  return { via: meta.via, transcript: !!meta.transcript, places: updated };
 }
 
 /** Re-run the branch search for a saved place, for example after moving house. */

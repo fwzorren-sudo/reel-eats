@@ -6,12 +6,22 @@ It runs on free tiers. You don't need a Claude or OpenAI key.
 
 The phone app has four views:
 
-- **Map**: every saved place as a pin, colored by whether you've been, with your home marked.
-- **List**: sorted by distance from home, distance from where you are now, newest, or name. Search matches names, dishes, cities and notes.
-- **Categories**: tiles such as Pizza, Tacos & Mexican or Coffee & Cafe, with counts. Tap one to filter the list.
-- **Settings**: home address, miles or kilometers, sharing setup, re-checking branches after a move, and CSV or JSON export.
+- **Map**: every saved place as a pin, colored by whether you've been, with your home marked. A button shows where you are now.
+- **List**: each place with the reel's cover image, open or closed right now, and how far it is. Sort by distance from home, distance from where you are, newest, or name. Search matches names, dishes, cities, tags and notes.
+- **Browse**: tiles by category (Pizza, Coffee & Cafe), by city, or by occasion (date night, outdoor seating, and "Go soon" for new openings and pop-ups). Tap one to filter the list.
+- **Settings**: home address, sharing setup, partner codes, read-only links, Apify credit, and exports to CSV, JSON or Google My Maps.
 
-Each place opens a detail card. It has Google Maps and Apple Maps links, a link back to the reel, and Google's rating and price level. You can mark a place visited, rate it, add notes, pick a different branch, or fix a wrong match.
+**Open now** at the top filters every view to places open at this moment, in each place's own time zone. Together with the location button or "Nearest me", that's "what's open near me".
+
+Each place opens a detail card:
+
+- every reel that recommended it, with the creator and date ("Recommended by 3 creators")
+- Google Maps, Apple Maps, the restaurant's Instagram account and website
+- today's hours and the full week, Google's rating and price level, and the phone number
+- occasion tags and a "go soon" note when the reel says it just opened, is a pop-up, or has something for a limited time
+- links to book a table on OpenTable or Resy
+
+You can mark a place visited, rate it, add notes, edit its tags, pick a different branch, or fix a wrong match.
 
 ## How it works
 
@@ -19,22 +29,28 @@ Each place opens a detail card. It has Google Maps and Apple Maps links, a link 
 Instagram share button
   -> iPhone Shortcut (or the installed app on Android)
   -> POST /api/share on your Cloudflare Worker
-       1. read the reel: Apify's Instagram Scraper if you add a token, otherwise Instagram's public page
+       1. read the reel through Apify, two readers side by side:
+            - Post Details: caption, poster, tagged accounts, post date, cover image,
+              and the location tag with its coordinates
+            - Transcripts: what's said in the video
+          Apify's own Instagram Scraper takes over if Post Details fails.
+          Without an Apify token, Instagram's public page is used.
        2. collect likely venue names:
             - a name you typed
             - "📍" lines in the caption
             - the location tag
-            - Cloudflare Workers AI reading the caption
+            - Cloudflare Workers AI reading the caption and transcript
             - if none of those work: tagged accounts, @mentions and the poster
-       3. Google Places checks each name, keeps only real food and drink businesses,
-          and picks the branch closest to your home
-       4. save to a Cloudflare D1 database
+       3. Google Places checks each name around where the reel was filmed, keeps only
+          real food and drink businesses, and picks the branch closest to your home
+       4. save to a Cloudflare D1 database, with the reel's cover image and the raw
+          Apify results
   -> the phone app shows it on the map
 ```
 
 Google does the checking, so a wrong guess from the caption usually just finds nothing. An @mention of a friend or a food blogger doesn't match a restaurant and is skipped.
 
-A reel that pins several places ("top 5 tacos in Austin") becomes several entries. Sharing the same reel twice doesn't create duplicates. Saving a different branch of a chain you already have counts as a duplicate too.
+A reel that pins several places ("top 5 tacos in Austin") becomes several entries. Sharing the same reel twice doesn't create duplicates. Saving a different branch of a chain you already have counts as a duplicate too. When a second creator's reel points at a place you already have, the reel is added to that place instead, so you can see how many creators recommend it.
 
 When nothing in the reel leads to a restaurant, the share waits in the app under "Just shared" with a box for the name. Type it and Reel Eats retries.
 
@@ -44,13 +60,15 @@ When nothing in the reel leads to a restaurant, the share waits in the app under
 | --- | --- | --- |
 | Cloudflare account | Yes | The free plan covers the Worker, the database and Workers AI for personal use |
 | Google Maps Platform key with **Places API (New)** | Yes | Google gives a free monthly allowance per Places API SKU. A personal list uses a small part of it |
-| Apify account and API token | Recommended | Apify charges per result. The free plan's monthly credit normally covers a personal list. Check the Instagram Scraper's page for current pricing |
+| Apify account and API token | Recommended | Apify charges per result, about $0.01 per reel for post details and transcript together. The free plan's $5 a month covers roughly 500 reels. Check each actor's page for current pricing |
 | Node.js 20 or newer | Yes, to deploy | Free |
 | Anthropic API key | No | Optional upgrade, see below |
 
-**Why Apify helps.** Instagram often refuses requests from cloud servers. When that happens, Reel Eats only has the link, so it asks you for the name. Apify fetches the caption, location tag and tagged accounts reliably.
+**Why Apify helps.** Instagram often refuses requests from cloud servers. When that happens, Reel Eats only has the link, so it asks you for the name. Apify fetches the caption, location tag, tagged accounts and transcript reliably. The app warns you when 80% of the month's Apify credit is used, and again if it runs out.
 
-**Workers AI allowance.** Cloudflare includes 10,000 Workers AI "neurons" a day for free. At Cloudflare's published rates for the default Llama 3.3 70B model, one reel uses roughly 50 to 100, so the free allowance covers about 100 reels a day.
+**Google allowance.** Opening hours come from the same Google Places price tier as the rating and phone number Reel Eats already uses, so they add no cost of their own. The daily job re-checks each place about once a month, which uses one Place Details request per place.
+
+**Workers AI allowance.** Cloudflare includes 10,000 Workers AI "neurons" a day for free. At Cloudflare's published rates for the default Llama 3.3 70B model, one reel with its transcript uses roughly 50 to 150, so the free allowance covers about 70 reels a day.
 
 ## Setup
 
@@ -71,7 +89,7 @@ Run these from this folder.
 
 3. **Create the Google key.** In Google Cloud, create a project, enable **Places API (New)**, and create an API key. Under the key's API restrictions, allow only Places API (New). Adding a budget alert is a good idea.
 
-4. **Get an Apify token.** Sign up at apify.com. In Apify Console, open **Settings**, then **API & Integrations**, and copy your personal API token. Reel Eats uses Apify's own **Instagram Scraper** actor. You don't need to set it up in Apify first.
+4. **Get an Apify token.** Sign up at apify.com. In Apify Console, open **Settings**, then **API & Integrations**, and copy your personal API token. Reel Eats uses three actors from the Apify Store: **Instagram Post Details** (`data-slayer~instagram-post-details`), **Instagram Transcripts** (`apple_yang~instagram-transcripts-scraper`), and Apify's own **Instagram Scraper** as a fallback. You don't need to set them up in Apify first. Each run has a spending cap of a few cents.
 
 5. **Store the secrets.** Each command asks you to paste the value. The access code is a password you make up. The phone app and the Shortcut both use it.
 
@@ -124,13 +142,30 @@ Install the app from Chrome as in setup step 7. After that, **Reel Eats** appear
 
 ## Using the app
 
-- **To try, Visited, All**: the switch at the top filters every view. The category menu next to it narrows further.
+- **To try, Visited, All**: the switch at the top filters every view. **Open now** and the category menu next to it narrow further.
+- **Browse**: switch between Categories, Cities and Occasions. "Go soon" collects new openings, pop-ups and limited-time items. The note fades after a few months, since "just opened" stops being true.
 - **Nearest branch**: the detail card says "Closest of 3 locations found". Open **All 3 locations** to switch to another branch.
 - **Wrong match**: open **Wrong place?** on the detail card, search Google Maps, and pick the right result.
+- **Tags**: open **Edit details** on a place to add or remove occasions, or change the "go soon" note.
 - **Moving house**: save the new address in Settings. Distances update right away, and chains switch to the closest branch Reel Eats already knows about. Tap **Re-check nearest branches** to search again around the new home.
-- **Backups**: Settings exports the whole list as CSV or JSON.
+- **Closures**: once a day the Worker re-checks places that haven't been checked for a month, updating hours, ratings and whether Google lists them as closed. A place that closed for good gets a red label, and the list shows a notice. **Refresh hours and closures** in Settings runs the check now.
+- **A partner's own code**: in Settings, under **Partner access**, type their name and tap **Make a code**. They sign in with that code, and it also works in their own iPhone Shortcut. What they save shows "Added by" with their name. They can't see or change partner codes or links. **Turn off** stops a code right away.
+- **Read-only links**: under **Share a read-only list**, pick To try, Visited or All, and optionally one category. Anyone with the link sees those places on a map and list, without your notes, your home address or distances. **Turn off** disables the link.
+- **Google My Maps**: **Google My Maps (KML)** in Settings downloads a file. In Google My Maps, create a map, tap **Import**, and pick it. Each pin has the category, status, tags, reel and Google Maps link, so My Maps can color pins by category.
+- **Backups**: Settings also exports the whole list as CSV or JSON.
 
 Every 10 minutes the Worker also finishes any share whose background job was cut short, so a reel you shared still lands even if you never open the app.
+
+### What's kept for each reel
+
+Everything goes into your D1 database:
+
+- the caption, poster, post date, location tag with coordinates, and transcript
+- the raw results from both Apify readers, so reels can be reprocessed later without paying again
+- a copy of the cover image, since Instagram's image links stop working after a few days
+- every place the reel led to, with a link back to the reel
+
+Reels saved before the transcript and raw results were collected can be read again with `POST /api/shares/<id>/reread`, using the owner's access code. That costs one Apify read.
 
 ## Settings you can change
 
@@ -139,7 +174,12 @@ These live under `vars` in `wrangler.jsonc`. Redeploy after editing.
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `AI_MODEL` | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | Workers AI model that reads captions. Set it to `off` to use only pins, tags and mentions. |
-| `APIFY_ACTOR` | `apify~instagram-scraper` | Apify actor that reads the reel. `apify~instagram-reel-scraper` also works. Add it under `vars` only to change it. Results for a different reel than the one shared are ignored. |
+| `APIFY_POST_ACTOR` | `data-slayer~instagram-post-details` | Main Apify reader. Set it to `off` to use only the fallback. |
+| `APIFY_ACTOR` | `apify~instagram-scraper` | Fallback reader when the main one fails. `apify~instagram-reel-scraper` also works. |
+| `APIFY_TRANSCRIPT_ACTOR` | `apple_yang~instagram-transcripts-scraper` | Reads what's said in the video. |
+| `APIFY_TRANSCRIPTS` | `on` | Set to `off` to skip transcripts and save about half the Apify cost. |
+
+The Apify variables aren't in `wrangler.jsonc`. Add them under `vars` only to change them. Results for a different reel than the one shared are ignored. The daily job's time is in `triggers` in `wrangler.jsonc` and `DAILY_CRON` in `src/upkeep.ts`; change both together.
 
 ### Optional: use Claude instead
 
@@ -157,8 +197,9 @@ With Claude Opus 5, requests opt into Anthropic's server-side fallback, `fallbac
 
 - **Captions that never name the place.** Without Claude, Reel Eats relies on what the post points at: pins, the location tag, tagged accounts and mentions, plus Workers AI's reading of the caption. A reel that only says "best tacos ever" needs you to type the name.
 - **Private accounts and stories** can't be read.
-- **Where your data goes.** The list and your home address are stored in your own Cloudflare D1 database. Reel links go to Apify if you set a token. Captions go to Cloudflare Workers AI, which runs on Cloudflare's network under your account. Restaurant names and your home location go to Google Places. Nothing goes to Anthropic unless you add a Claude key.
-- **Access.** Anyone with the access code can read and change your list. Rotate it with `npx wrangler secret put APP_TOKEN`, then enter the new code on your phone and in the Shortcut.
+- **Where your data goes.** The list and your home address are stored in your own Cloudflare D1 database. Reel links go to Apify if you set a token, including to the two third-party actors named above. Captions and transcripts go to Cloudflare Workers AI, which runs on Cloudflare's network under your account. Restaurant names, your home location and the reel's location go to Google Places. Nothing goes to Anthropic unless you add a Claude key.
+- **Access.** Anyone with the owner's access code can read and change your list and its settings. Rotate it with `npx wrangler secret put APP_TOKEN`, then enter the new code on your phone and in the Shortcut. Partner codes can read and change places but not settings; only a hash of each is stored, so a lost code can't be shown again. Make a new one instead.
+- **Read-only links** are long random addresses. Anyone who has one can see that list until you turn it off. Cover images are served at unguessable addresses without a code, so shared lists can show them.
 - **Workers free plan.** The free plan limits CPU time per request. If saves fail with a "CPU time limit" error in the Cloudflare dashboard, the Workers Paid plan raises that limit.
 
 ## Development
@@ -173,7 +214,7 @@ npm run typecheck
 
 ### Testing without real API keys
 
-`test/e2e/mock-upstreams.mjs` stands in for Apify, Google Places, Claude and a web page. `test/e2e/smoke.mjs` runs the whole API against `wrangler dev`. It covers mentions, location tags, pins, chains, list reels, duplicates, retries, typed names, branch switching and moving house. `test/e2e/wrangler.e2e.jsonc` is the same Worker without the Workers AI binding, because that binding always needs a Cloudflare login.
+`test/e2e/mock-upstreams.mjs` stands in for the three Apify actors, Google Places, Claude and a web page. `test/e2e/smoke.mjs` runs the whole API against `wrangler dev`. It covers mentions, location tags, pins, chains, list reels, duplicates, a second creator's reel, the fallback reader, transcripts, tags, hours, cover images, retries, typed names, branch switching, moving house, partner codes, read-only links and the monthly re-check. `test/e2e/wrangler.e2e.jsonc` is the same Worker without the Workers AI binding, because that binding always needs a Cloudflare login.
 
 ```sh
 node test/e2e/mock-upstreams.mjs 8799 &
@@ -186,16 +227,21 @@ MODE=rules node test/e2e/smoke.mjs
 
 To test the Claude path, add `--var ANTHROPIC_API_KEY:sk-test --var ANTHROPIC_BASE_URL:http://127.0.0.1:8799` to `wrangler dev`, start with a fresh local database, and run with `MODE=claude`.
 
+To run the scheduled jobs locally, open `http://localhost:8787/cdn-cgi/handler/scheduled?cron=17+8+*+*+*` for the daily job, or `?cron=*/10+*+*+*+*` for the 10-minute one.
+
 ### Layout
 
 | Path | Contents |
 | --- | --- |
-| `src/index.ts` | API routes, access-code check and the 10-minute cleanup job |
+| `src/index.ts` | API routes, access codes, read-only links and the scheduled jobs |
 | `src/pipeline.ts` | Processing a share from start to finish |
+| `src/upkeep.ts` | The daily job: Google re-checks, cover-image backfill, Apify credit |
 | `src/source.ts` | Reading reels through Apify, Instagram's public page, TikTok and other links |
+| `src/tags.ts` | Occasion tags and "go soon" notes found in captions and transcripts |
+| `src/media.ts` | Keeping copies of reel cover images |
 | `src/identify.ts` | Finding venue names in pins, tags, mentions and typed notes |
 | `src/workersai.ts` | The Workers AI request that reads captions |
 | `src/extract.ts` | The optional Claude request |
 | `src/places.ts` | Google Places search, food filtering, categories and choosing the nearest branch |
 | `src/db.ts`, `migrations/` | D1 tables and queries |
-| `public/` | The phone app, which is plain HTML, CSS and JavaScript with no build step |
+| `public/` | The phone app, which is plain HTML, CSS and JavaScript with no build step. `hours.js` works out "open now"; `kml.js` writes the Google My Maps file |

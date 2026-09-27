@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { brandQuery, categoryFor, cuisineFor, guessCategory, isFoodPlace, PlacesClient, resolveBranch, toCandidate } from "../src/places";
 import { businessName } from "../src/pipeline";
-import { ruleCandidates } from "../src/identify";
+import { CITY_RADIUS_M, ruleCandidates } from "../src/identify";
 import { mapApifyItem } from "../src/source";
 import { readFileSync } from "node:fs";
+import { distanceMeters } from "../src/geo";
 import type { ExtractedPlace, Home } from "../src/types";
 
 const HOME_JC: Home = { address: "Jersey City, NJ", lat: 40.7178, lng: -74.0431 };
@@ -27,10 +28,10 @@ function raw(id: string, name: string, lat: number, lng: number, extra: Record<s
 
 /** Route fake Google responses on the text query. */
 function mockGoogle(routes: Record<string, unknown[]>) {
-  const calls: { textQuery: string; bias: boolean }[] = [];
+  const calls: { textQuery: string; bias: boolean; circle?: { center: { latitude: number; longitude: number }; radius: number } }[] = [];
   vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
     const body = JSON.parse(String(init.body));
-    calls.push({ textQuery: body.textQuery, bias: !!body.locationBias });
+    calls.push({ textQuery: body.textQuery, bias: !!body.locationBias, circle: body.locationBias?.circle });
     return new Response(JSON.stringify({ places: routes[body.textQuery] ?? [] }), { status: 200 });
   });
   return calls;
@@ -224,5 +225,64 @@ describe("the Rosetta Bakery reel from Apify", () => {
     const res = await resolveBranch(client, pin, { address: "Sandy Springs", lat: 33.9304, lng: -84.3733 });
     expect(res?.best.id).toBe("rb_high");
     expect(calls.map((c) => c.textQuery)).toEqual(["Rosetta Bakery", "Rosetta Bakery 120 High Street, Dunwoody, GA"]);
+  });
+});
+
+describe("hours and time zone", () => {
+  it("keeps Google's opening hours, time zone and offset", () => {
+    const periods = [{ open: { day: 1, hour: 8, minute: 0 }, close: { day: 1, hour: 17, minute: 0 } }];
+    const c = toCandidate(
+      raw("x", "Rosetta Bakery", 33.93, -84.34, {
+        regularOpeningHours: { openNow: true, periods, weekdayDescriptions: ["Monday: 8:00 AM – 5:00 PM"] },
+        timeZone: { id: "America/New_York" },
+        utcOffsetMinutes: -240,
+      }),
+      null,
+    );
+    expect(c.hours).toEqual({ periods, weekdayDescriptions: ["Monday: 8:00 AM – 5:00 PM"] });
+    expect(c.timeZone).toBe("America/New_York");
+    expect(c.utcOffset).toBe(-240);
+  });
+
+  it("leaves them empty when Google has none", () => {
+    const c = toCandidate(raw("y", "Pop-up", 40, -74), null);
+    expect(c).toMatchObject({ hours: null, timeZone: "", utcOffset: null });
+  });
+});
+
+describe("searching where the reel was filmed", () => {
+  const client = new PlacesClient("test-key");
+  const site = { websiteUri: "https://www.rosettabakery.com/", primaryType: "bakery", types: ["bakery", "food"] };
+  const highStreet = raw("rb_high", "Rosetta Bakery", 33.9296, -84.344, site);
+  const buckhead = raw("rb_buck", "Rosetta Bakery", 33.8384, -84.3797, site);
+  const [post] = JSON.parse(readFileSync(new URL("./fixtures/apify-post-details-rosetta.json", import.meta.url), "utf8"));
+  const meta = mapApifyItem("https://www.instagram.com/reel/DdmxY_iRYKE/", post);
+
+  it("biases the reel's own search to the location tag's coordinates, and measures distance from home", async () => {
+    const rules = ruleCandidates(meta, null);
+    expect(rules.area).toEqual({ lat: 33.7566, lng: -84.3889, radius: CITY_RADIUS_M });
+    const pin = rules.primary[0];
+    expect(pin.near).toEqual(rules.area);
+    const calls = mockGoogle({
+      "Rosetta Bakery": [buckhead, highStreet],
+      "Rosetta Bakery 120 High Street, Dunwoody, GA": [highStreet],
+    });
+    const carrollton = { address: "Carrollton, GA", lat: 33.5801, lng: -85.0766 };
+    const res = await resolveBranch(client, pin, carrollton);
+    const filmed = calls.find((c) => c.textQuery.includes("High Street"))!;
+    expect(filmed.circle).toEqual({ center: { latitude: 33.7566, longitude: -84.3889 }, radius: CITY_RADIUS_M });
+    const nearHome = calls.find((c) => c.textQuery === "Rosetta Bakery")!;
+    expect(nearHome.circle?.center).toEqual({ latitude: 33.5801, longitude: -85.0766 });
+    expect(res?.best.id).toBe("rb_buck");
+    // Measured from home in Carrollton, not from the Atlanta location tag.
+    expect(res!.best.distanceM).toBe(Math.round(distanceMeters(carrollton.lat, carrollton.lng, 33.8384, -84.3797)));
+    expect(res!.best.distanceM).toBeGreaterThan(60000);
+  });
+
+  it("searches right at a venue's location tag when the post gives no city", async () => {
+    const venue = { ...meta, caption: "So good", mentions: [], locationName: "Rosetta Bakery", location: { name: "Rosetta Bakery", lat: 33.9296, lng: -84.344, address: "120 High St", city: "Dunwoody, Georgia" } };
+    const [c] = ruleCandidates(venue, null).primary;
+    expect(c.near).toEqual({ lat: 33.9296, lng: -84.344, radius: 1500 });
+    expect(c.address_hint).toBe("120 High St, Dunwoody, Georgia");
   });
 });

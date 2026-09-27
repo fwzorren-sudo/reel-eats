@@ -1,9 +1,11 @@
 /* Offline shell for Reel Eats. API calls always go to the network. */
-const VERSION = "reel-eats-v3";
+const VERSION = "reel-eats-v4";
 const SHELL = [
   "/",
   "/index.html",
   "/app.js",
+  "/hours.js",
+  "/kml.js",
   "/styles.css",
   "/manifest.webmanifest",
   "/vendor/leaflet/leaflet.js",

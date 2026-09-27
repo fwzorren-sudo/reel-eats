@@ -1,5 +1,5 @@
 import { distanceMeters, matchesAny, websiteHost } from "./geo";
-import type { Category, ExtractedPlace, Home, PlaceCandidate } from "./types";
+import type { Category, Env, ExtractedPlace, GeoPoint, Home, OpeningHours, PlaceCandidate, SearchArea } from "./types";
 
 const FIELDS = [
   "id",
@@ -17,6 +17,9 @@ const FIELDS = [
   "primaryType",
   "types",
   "addressComponents",
+  "regularOpeningHours",
+  "utcOffsetMinutes",
+  "timeZone",
 ];
 
 const PRICE: Record<string, string> = {
@@ -46,9 +49,16 @@ interface RawPlace {
   primaryType?: string;
   types?: string[];
   addressComponents?: { longText?: string; shortText?: string; types?: string[] }[];
+  regularOpeningHours?: { periods?: OpeningHours["periods"]; weekdayDescriptions?: string[] };
+  utcOffsetMinutes?: number;
+  timeZone?: { id?: string };
 }
 
 export class PlacesError extends Error {}
+
+export function placesClient(env: Pick<Env, "GOOGLE_MAPS_API_KEY" | "PLACES_BASE_URL">): PlacesClient {
+  return new PlacesClient(env.GOOGLE_MAPS_API_KEY, env.PLACES_BASE_URL || undefined);
+}
 
 export class PlacesClient {
   constructor(
@@ -74,22 +84,28 @@ export class PlacesClient {
     return body;
   }
 
-  async textSearch(textQuery: string, opts: { bias?: Home | null; pageSize?: number } = {}): Promise<PlaceCandidate[]> {
+  /**
+   * `bias` is where to look; `home` is what distances are measured from.
+   * They differ when searching around the spot a reel was filmed.
+   */
+  async textSearch(
+    textQuery: string,
+    opts: { bias?: GeoPoint | SearchArea | null; home?: GeoPoint | null; pageSize?: number } = {},
+  ): Promise<PlaceCandidate[]> {
     const body: Record<string, unknown> = { textQuery, pageSize: opts.pageSize ?? 20 };
     if (opts.bias) {
-      body.locationBias = {
-        circle: { center: { latitude: opts.bias.lat, longitude: opts.bias.lng }, radius: BIAS_RADIUS_M },
-      };
+      const radius = Math.min("radius" in opts.bias ? opts.bias.radius : BIAS_RADIUS_M, BIAS_RADIUS_M);
+      body.locationBias = { circle: { center: { latitude: opts.bias.lat, longitude: opts.bias.lng }, radius } };
     }
     const json = (await this.call(
       "/v1/places:searchText",
       { method: "POST", body: JSON.stringify(body) },
       FIELDS.map((f) => `places.${f}`).join(","),
     )) as { places?: RawPlace[] };
-    return (json.places ?? []).filter((p) => p.location).map((p) => toCandidate(p, opts.bias ?? null));
+    return (json.places ?? []).filter((p) => p.location).map((p) => toCandidate(p, opts.home ?? null));
   }
 
-  async details(placeId: string, home: Home | null): Promise<PlaceCandidate | null> {
+  async details(placeId: string, home: GeoPoint | null): Promise<PlaceCandidate | null> {
     const json = (await this.call(`/v1/places/${encodeURIComponent(placeId)}`, { method: "GET" }, FIELDS.join(","))) as RawPlace;
     return json.location ? toCandidate(json, home) : null;
   }
@@ -103,7 +119,7 @@ function cityOf(p: RawPlace): string {
   return [town?.longText, region?.shortText].filter(Boolean).join(", ");
 }
 
-export function toCandidate(p: RawPlace, home: Home | null): PlaceCandidate {
+export function toCandidate(p: RawPlace, home: GeoPoint | null): PlaceCandidate {
   const lat = p.location!.latitude;
   const lng = p.location!.longitude;
   return {
@@ -124,7 +140,17 @@ export function toCandidate(p: RawPlace, home: Home | null): PlaceCandidate {
     distanceM: home ? Math.round(distanceMeters(home.lat, home.lng, lat, lng)) : null,
     primaryType: p.primaryType ?? "",
     types: p.types ?? [],
+    hours: p.regularOpeningHours?.periods
+      ? { periods: p.regularOpeningHours.periods, weekdayDescriptions: p.regularOpeningHours.weekdayDescriptions ?? [] }
+      : null,
+    timeZone: p.timeZone?.id ?? "",
+    utcOffset: p.utcOffsetMinutes ?? null,
   };
+}
+
+/** Branch lists are stored with each place, so leave out the bulky hours. */
+export function branchSummary(c: PlaceCandidate): PlaceCandidate {
+  return { ...c, hours: null };
 }
 
 const FOOD_TYPES = new Set([
@@ -187,7 +213,7 @@ export function cuisineFor(c: PlaceCandidate): string {
   return /^(restaurant|food|point of interest|establishment)$/i.test(label) ? "" : label;
 }
 
-export async function geocodeHome(client: PlacesClient, address: string): Promise<Home | null> {
+export async function geocodeHome(client: PlacesClient, address: string): Promise<{ address: string; lat: number; lng: number } | null> {
   const results = await client.textSearch(address, { pageSize: 1 });
   const top = results[0];
   if (!top) return null;
@@ -210,20 +236,23 @@ export interface Resolution {
  * Find the restaurant on Google Maps and pick the branch closest to home.
  *
  * Two searches run: the name near home (finds local branches of chains) and the name
- * in the city from the reel (finds the exact place that was filmed). A local result is
- * only treated as the same business when Claude said it has several locations or it
- * shares a website with the filmed place, so a same-named local spot isn't mistaken
- * for the one in the reel.
+ * where the reel was filmed (the city or address from the post, or around the location
+ * tag's coordinates). A local result is only treated as the same business when the
+ * post says it has several locations or it shares a website with the filmed place, so a
+ * same-named local spot isn't mistaken for the one in the reel.
  */
-export async function resolveBranch(client: PlacesClient, place: ExtractedPlace, home: Home | null): Promise<Resolution | null> {
+export async function resolveBranch(client: PlacesClient, place: ExtractedPlace, home: Home | GeoPoint | null): Promise<Resolution | null> {
   const names = [place.name, ...place.alt_names].filter(Boolean);
   const query = place.search_query || place.name;
   const where = place.address_hint || place.city;
+  const filmed = place.near ?? null;
 
   const [near, hinted, plain] = await Promise.all([
-    home ? client.textSearch(query, { bias: home }) : Promise.resolve([]),
-    where ? client.textSearch(`${query} ${where}`, { bias: home, pageSize: 10 }) : Promise.resolve([]),
-    !home && !where ? client.textSearch(query, { pageSize: 10 }) : Promise.resolve([]),
+    home ? client.textSearch(query, { bias: home, home }) : Promise.resolve([]),
+    where || filmed
+      ? client.textSearch(where ? `${query} ${where}` : query, { bias: filmed ?? home, home, pageSize: 10 })
+      : Promise.resolve([]),
+    !home && !where && !filmed ? client.textSearch(query, { pageSize: 10 }) : Promise.resolve([]),
   ]);
 
   const open = (c: PlaceCandidate) => c.businessStatus !== "CLOSED_PERMANENTLY" && matchesAny(c.name, names);
@@ -254,7 +283,7 @@ export async function resolveBranch(client: PlacesClient, place: ExtractedPlace,
   const brand = brandQuery(pool[0].name);
   if (home && host && brand && brand.toLowerCase() !== query.toLowerCase()) {
     try {
-      const siblings = await client.textSearch(brand, { bias: home });
+      const siblings = await client.textSearch(brand, { bias: home, home });
       pool.push(...siblings.filter((c) => c.businessStatus !== "CLOSED_PERMANENTLY" && websiteHost(c.website) === host));
     } catch {
       /* the branch we already have is still good */
