@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { cleanTags, priceTags, ruleGoSoon, ruleTags } from "../src/tags";
+import { cleanTags, priceTags, ruleGoSoon, ruleTags, supportedTags } from "../src/tags";
 
 const fixture = (name: string) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"))[0];
 
@@ -48,5 +48,20 @@ describe("reasons to go soon", () => {
 
   it("stays quiet otherwise", () => {
     expect(ruleGoSoon("Best tacos in Queens, been going for years")).toBe("");
+  });
+});
+
+describe("the two reels from Sep 27", () => {
+  it("reads a Halloween takeover as a pop-up, not a new opening", () => {
+    const tinLizzys = "Atlanta’s longtime Halloween favorite is BACK 👻🐷\n\nThe Wicked Pig has officially taken over Tin Lizzy’s Midtown with over-the-top Halloween decor, spooky cocktails\n🗓️ Now open starting September 18";
+    expect(ruleGoSoon(tinLizzys)).toBe("Pop-up");
+    expect(ruleGoSoon("Our Halloween menu is back")).toBe("Seasonal");
+  });
+  it("reads 'opens today' as a new opening", () => {
+    expect(ruleGoSoon("🍸@lacuevaatl opens TODAY! 🎉")).toBe("New opening");
+  });
+  it("keeps an AI tag only when the post's words support it", () => {
+    const laCueva = "speakeasy ... the bar even glows ... cave walls, a glowing bar, and even live music. Their drinks were incredible";
+    expect(supportedTags(["splurge", "cocktails", "live music", "date night"], laCueva)).toEqual(["cocktails", "live music"]);
   });
 });

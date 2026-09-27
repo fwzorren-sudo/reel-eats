@@ -359,10 +359,9 @@ export async function fetchViaApify(env: Env, url: string): Promise<SourceMeta |
     if (!item) console.warn(`Apify didn't return ${url}; falling back to Instagram's page`);
     return creditError ? { ...emptyMeta(url), apifyError: creditError } : null;
   }
-  if (t?.text?.trim()) {
-    meta.transcript = t.text.trim().slice(0, 6000);
-    meta.rawTranscript = JSON.stringify(t);
-  }
+  // Kept even when empty: a reel with only music has no words, and that's worth knowing too.
+  if (t) meta.rawTranscript = JSON.stringify(t);
+  if (t?.text?.trim()) meta.transcript = t.text.trim().slice(0, 6000);
   if (creditError) meta.apifyError = creditError;
   return meta;
 }

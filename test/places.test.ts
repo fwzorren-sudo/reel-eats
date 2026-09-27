@@ -286,3 +286,15 @@ describe("searching where the reel was filmed", () => {
     expect(c.address_hint).toBe("120 High St, Dunwoody, Georgia");
   });
 });
+
+describe("food check", () => {
+  it("doesn't mistake a barber shop for a food business", () => {
+    expect(isFoodPlace({ primaryType: "barber_shop", types: ["barber_shop", "hair_care", "point_of_interest", "establishment"] })).toBe(false);
+    expect(isFoodPlace({ primaryType: "shopping_mall", types: ["shopping_mall", "point_of_interest"] })).toBe(false);
+  });
+  it("still accepts food shops, bars and restaurants", () => {
+    for (const t of ["coffee_shop", "bagel_shop", "ice_cream_shop", "cocktail_bar", "wine_bar", "mexican_restaurant", "steak_house", "bakery"]) {
+      expect(isFoodPlace({ primaryType: t, types: [t] })).toBe(true);
+    }
+  });
+});

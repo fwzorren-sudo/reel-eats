@@ -3,8 +3,17 @@ import type { Home, PlaceCandidate, PlaceRow, ShareLinkScope, ShareRow, SourceRo
 export const now = () => Date.now();
 export const newId = () => crypto.randomUUID();
 
-/** A share stuck in "processing" this long is assumed dead and can be claimed again. */
-export const STALE_CLAIM_MS = 120_000;
+/**
+ * A share stuck in "processing" this long is assumed dead and can be claimed again. Reading a
+ * reel through Apify can take a couple of minutes; once it's stored, the rest takes seconds.
+ */
+export const STALE_CLAIM_MS = 150_000;
+export const STALE_STORED_MS = 45_000;
+
+/** SQL for "processing but stuck", with the two cutoffs from `staleCutoffs` bound in order. */
+export const STUCK_SQL = `(status = 'processing' AND claimed_at < CASE
+  WHEN source_url IS NULL OR raw_post IS NOT NULL OR source_caption IS NOT NULL THEN ? ELSE ? END)`;
+export const staleCutoffs = (t: number) => [t - STALE_STORED_MS, t - STALE_CLAIM_MS];
 
 export async function getSetting<T>(db: D1Database, key: string): Promise<T | null> {
   const row = await db.prepare("SELECT value FROM settings WHERE key = ?").bind(key).first<{ value: string }>();
@@ -53,10 +62,10 @@ export async function claimShare(db: D1Database, id: string): Promise<ShareRow |
   return db
     .prepare(
       `UPDATE shares SET status = 'processing', claimed_at = ?, attempts = attempts + 1, updated_at = ?
-       WHERE id = ? AND (status IN ('pending', 'failed') OR (status = 'processing' AND claimed_at < ?))
+       WHERE id = ? AND (status IN ('pending', 'failed') OR ${STUCK_SQL})
        RETURNING *`,
     )
-    .bind(t, t, id, t - STALE_CLAIM_MS)
+    .bind(t, t, id, ...staleCutoffs(t))
     .first<ShareRow>();
 }
 

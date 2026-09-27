@@ -142,7 +142,12 @@ const REELS = {
   TACOS2: { ownerUsername: "queenseats", caption: "Date night at @tacosdelnorte, the birria is unreal", locationName: "" },
   // Post Details fails for this one, so the official scraper is used.
   FALLBACK: { ownerUsername: "lucalifan", caption: "📍 Lucali, Carroll Gardens. Worth the wait.", locationName: "" },
+  // Post Details takes 18 seconds for this one, too long to finish in the background.
+  SLOW1: { ownerUsername: "slowreels", caption: "📍 Tsujita LA, Sawtelle. The tsukemen is unreal.", locationName: "" },
 };
+
+/** How often each actor was asked for each reel, for GET /__calls. */
+const calls = {};
 
 // What's said in each test reel.
 const TRANSCRIPTS = {
@@ -249,6 +254,8 @@ const server = createServer(async (req, res) => {
     const body = JSON.parse(raw);
     const link = body.postUrls?.[0] || body.bulkUrls?.[0] || body.directUrls?.[0] || "";
     const code = codeOf(link);
+    calls[`${actor} ${code}`] = (calls[`${actor} ${code}`] || 0) + 1;
+    if (code === "SLOW1" && actor === "data-slayer~instagram-post-details") await new Promise((r) => setTimeout(r, 18000));
     let out = [];
     if (actor === "data-slayer~instagram-post-details") {
       if (code === "FALLBACK") return send(res, 500, { error: { message: "mock: post details failed" } });
@@ -264,6 +271,8 @@ const server = createServer(async (req, res) => {
     console.log(`[apify] ${actor} ${link} -> ${out.length ? code : "none"}`);
     return send(res, 200, out);
   }
+
+  if (req.method === "GET" && url.pathname === "/__calls") return send(res, 200, calls);
 
   if (req.method === "GET" && url.pathname === "/v2/users/me/limits") {
     if (req.headers.authorization !== "Bearer test-apify") return send(res, 401, { error: { type: "token-not-valid" } });

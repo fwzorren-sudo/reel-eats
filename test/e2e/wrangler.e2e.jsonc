@@ -19,5 +19,5 @@
       "migrations_dir": "../../migrations"
     }
   ],
-  "triggers": { "crons": ["*/10 * * * *", "17 8 * * *"] }
+  "triggers": { "crons": ["* * * * *", "17 8 * * *"] }
 }

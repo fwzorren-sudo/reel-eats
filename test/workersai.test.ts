@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { DEFAULT_AI_MODEL, extractWithWorkersAI, parseAiPlaces } from "../src/workersai";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { AI_TIMEOUT_MS, DEFAULT_AI_MODEL, extractWithWorkersAI, parseAiPlaces, salvagePlaces, SYSTEM } from "../src/workersai";
 import { emptyMeta } from "../src/source";
 import type { Env } from "../src/types";
 
@@ -49,7 +49,7 @@ describe("tags, go-soon notes and the transcript", () => {
         places: [{ name: "Lucali", city: "", cuisine: "", summary: "", dishes: [], tags: ["date night", "romantic vibes", "DATE NIGHT"], go_soon: "New opening" }],
       },
     });
-    const out = await extractWithWorkersAI(env, { ...meta, transcript: "Lucali just opened a second spot" }, null);
+    const out = await extractWithWorkersAI(env, { ...meta, transcript: "Lucali just opened a second spot, perfect for a date" }, null);
     expect(out[0].tags).toEqual(["date night"]);
     expect(out[0].go_soon).toBe("New opening");
     expect(calls[0].input.messages[1].content).toContain("Spoken in the video:\nLucali just opened a second spot");
@@ -66,5 +66,40 @@ describe("parseAiPlaces", () => {
   it("tolerates junk", () => {
     expect(parseAiPlaces("no json here")).toEqual([]);
     expect(parseAiPlaces({ places: "nope" })).toEqual([]);
+  });
+});
+
+describe("answers that go wrong", () => {
+  afterEach(() => vi.useRealTimers());
+
+  // What Llama actually sent back for the La Cueva reel: tags repeated until max_tokens.
+  const looping =
+    '{"places": [{"city": "Atlanta", "cuisine": "", "dishes": ["goat cheese croquettes", "birria tortellini", "smashburger"], "go_soon": "New opening", "name": "La Cueva", "summary": "", "tags": ["date night", "cocktails", "date night", "live music", "date night", "live music", "date';
+
+  it("keeps the complete places from an answer that was cut off", () => {
+    expect(salvagePlaces('{"places": [{"name": "A", "note": "has } and { inside"}, {"name": "B"}, {"name": "C", "ta')).toEqual([
+      { name: "A", note: "has } and { inside" },
+      { name: "B" },
+    ]);
+    expect(salvagePlaces(looping)).toEqual([]);
+    expect(parseAiPlaces(looping)).toEqual([]);
+  });
+
+  it("lists the allowed tags in the prompt, which stops the repeating", () => {
+    expect(SYSTEM).toContain("at most 4, each used once, only from this list: date night, coffee date");
+  });
+
+  it("drops tags the post doesn't back up", () => {
+    const text = "La Cueva speakeasy with a glowing bar and live music";
+    const [p] = parseAiPlaces({ places: [{ name: "La Cueva", tags: ["splurge", "cocktails", "live music", "date night"] }] }, text);
+    expect(p.tags).toEqual(["cocktails", "live music"]);
+  });
+
+  it("gives up after the time limit and falls back to the rules", async () => {
+    vi.useFakeTimers();
+    const env = { AI: { run: () => new Promise(() => {}) } } as unknown as Env;
+    const result = extractWithWorkersAI(env, meta, null);
+    await vi.advanceTimersByTimeAsync(AI_TIMEOUT_MS + 10);
+    expect(await result).toEqual([]);
   });
 });

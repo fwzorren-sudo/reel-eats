@@ -274,13 +274,14 @@ async function loadGuest({ rerenderSheet = false } = {}) {
   if (rerenderSheet && state.sheet?.type === "place") openPlace(state.sheet.id, { keepScroll: true });
 }
 
-/** A share whose background job died gets processed while the app is open. */
+/** A share whose background job died gets processed while the app is open. Timings match src/db.ts. */
 function recoverStale() {
   const t = Date.now();
   for (const s of state.shares) {
+    const stored = !s.source_url || !!s.source_caption;
     const stale =
       (s.status === "pending" && t - s.created_at > 20000) ||
-      (s.status === "processing" && s.claimed_at && t - s.claimed_at > 125000);
+      (s.status === "processing" && s.claimed_at && t - s.claimed_at > (stored ? 47000 : 152000));
     if (stale && !recovering.has(s.id)) {
       recovering.add(s.id);
       api(`/api/shares/${s.id}/process`, { method: "POST" })

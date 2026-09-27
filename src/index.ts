@@ -21,7 +21,8 @@ import {
   revokeMember,
   revokeShareLink,
   setSetting,
-  STALE_CLAIM_MS,
+  staleCutoffs,
+  STUCK_SQL,
   updatePlace,
   updateShare,
 } from "./db";
@@ -45,6 +46,24 @@ import {
   type SourceRow,
   type Viewer,
 } from "./types";
+
+/** A share still pending this long after it was made is picked up by the every-minute job. */
+const BACKGROUND_GRACE_MS = 20_000;
+/**
+ * Background work gets 30 seconds after the reply. If reading the reel took longer than this,
+ * the rest is left for the every-minute job instead of being cut off halfway.
+ */
+const DEFER_AFTER_MS = 17_000;
+
+/**
+ * Process a share and wait for it. It also runs as background work, so it carries on for a while
+ * if the phone disconnects, for example when the share menu closes before the Shortcut finishes.
+ */
+function processNow(env: Env, ctx: ExecutionContext, id: string) {
+  const job = processShare(env, id);
+  ctx.waitUntil(job.catch(() => undefined));
+  return job;
+}
 
 /** D1 rows top out at 2 MB, so screenshots are capped a little below that. */
 const MAX_IMAGE_BASE64 = 1_900_000;
@@ -213,10 +232,10 @@ async function handleShare(req: Request, env: Env, ctx: ExecutionContext, url: U
     }
     if (previous && previous.status !== "processing") {
       if (wait) {
-        const r = await processShare(env, previous.id);
+        const r = await processNow(env, ctx, previous.id);
         return reply({ ...r, share_id: previous.id });
       }
-      ctx.waitUntil(processShare(env, previous.id).catch(() => undefined));
+      ctx.waitUntil(processShare(env, previous.id, { deferAfterMs: DEFER_AFTER_MS }).catch(() => undefined));
       return reply({ status: "queued", message: "Saved. Finding the restaurant now.", share_id: previous.id });
     }
     if (previous) return reply({ status: "queued", message: "Already working on this one.", share_id: previous.id });
@@ -232,10 +251,10 @@ async function handleShare(req: Request, env: Env, ctx: ExecutionContext, url: U
   });
 
   if (wait) {
-    const r = await processShare(env, share.id);
+    const r = await processNow(env, ctx, share.id);
     return reply({ ...r, share_id: share.id });
   }
-  ctx.waitUntil(processShare(env, share.id).catch(() => undefined));
+  ctx.waitUntil(processShare(env, share.id, { deferAfterMs: DEFER_AFTER_MS }).catch(() => undefined));
   return reply({ status: "queued", message: "Saved. Finding the restaurant now.", share_id: share.id }, 202);
 }
 
@@ -455,14 +474,15 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
       const note = body.note?.trim().slice(0, 500);
       await updateShare(db, share.id, { status: "pending", error: null, ...(note ? { note } : {}) });
     }
-    return json(await processShare(env, share.id));
+    return json(await processNow(env, ctx, share.id));
   }
 
   if ((m = path.match(/^\/api\/shares\/([\w-]+)\/reread$/)) && method === "POST") {
     requireOwner(viewer);
     const share = await getShare(db, m[1]);
     if (!share) throw new HttpError(404, "Share not found.");
-    return json(await rereadShare(env, share));
+    const body = (await req.json().catch(() => ({}))) as { fresh?: boolean };
+    return json(await rereadShare(env, share, { fresh: body.fresh === true }));
   }
 
   if ((m = path.match(/^\/api\/shares\/([\w-]+)$/)) && method === "DELETE") {
@@ -591,7 +611,8 @@ export default {
   },
 
   /**
-   * Every 10 minutes: finish shares whose background job was cut short.
+   * Every minute: finish a share whose background job was cut short or handed over.
+   * One per run, since the free plan allows 50 outside requests per run.
    * Once a day: re-check places with Google, keep cover images, and check Apify credit.
    */
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
@@ -601,13 +622,12 @@ export default {
       return;
     }
     const t = Date.now();
-    const { results } = await env.DB.prepare(
-      `SELECT id FROM shares
-       WHERE (status = 'pending' AND created_at < ?) OR (status = 'processing' AND claimed_at < ?)
-       ORDER BY created_at LIMIT 3`,
+    const next = await env.DB.prepare(
+      `SELECT id FROM shares WHERE (status = 'pending' AND created_at < ?) OR ${STUCK_SQL}
+       ORDER BY created_at LIMIT 1`,
     )
-      .bind(t - 60_000, t - STALE_CLAIM_MS)
-      .all<{ id: string }>();
-    for (const { id } of results) await processShare(env, id);
+      .bind(t - BACKGROUND_GRACE_MS, ...staleCutoffs(t))
+      .first<{ id: string }>();
+    if (next) await processShare(env, next.id);
   },
 } satisfies ExportedHandler<Env>;

@@ -155,11 +155,14 @@ step("saves the Rosetta Bakery reel from real Apify results, with its transcript
 const rosettaShare = r.data.share_id;
 r = await call(`/api/shares/${rosettaShare}/reread`, { method: "POST" });
 assert.equal(r.status, 200, JSON.stringify(r.data));
-assert.equal(r.data.via, "apify");
+assert.equal(r.data.via, "stored", "re-reading reuses the stored Apify results by default");
 assert.equal(r.data.transcript, true);
 assert.equal(r.data.places.length, 1);
 assert.deepEqual(list(r.data.places[0].tags), ["coffee date", "work-friendly", "outdoor seating"], "re-reading doesn't duplicate tags");
-step("re-reads a saved reel to fill in details collected since");
+r = await call(`/api/shares/${rosettaShare}/reread`, { method: "POST", body: { fresh: true } });
+assert.equal(r.data.via, "apify");
+assert.deepEqual(list(r.data.places[0].tags), ["coffee date", "work-friendly", "outdoor seating"]);
+step("re-reads a saved reel to fill in details collected since, from storage or from Apify");
 
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 r = await call("/api/share", { method: "POST", body: { image_base64: png, image_type: "image/png" } });
@@ -318,5 +321,26 @@ assert.equal(r.data.place.archived_at, null);
 assert.equal(r.data.place.archive_reason, null);
 assert.equal(r.data.place.visit_status, "visited");
 step("unarchives a place");
+
+/* ----- a reel that's slow to read, shared in the background ----- */
+r = await call("/api/share", { method: "POST", body: { url: IG("SLOW1") } });
+assert.equal(r.status, 202, JSON.stringify(r.data));
+const slowId = r.data.share_id;
+const shareOf = async () => (await call("/api/state")).data.shares.find((s) => s.id === slowId);
+let s;
+for (let i = 0; i < 60; i++) {
+  await new Promise((res) => setTimeout(res, 1000));
+  s = await shareOf();
+  if (s?.status === "pending" && s.source_caption) break;
+}
+assert.equal(s?.status, "pending", "after reading the reel, the rest is handed to the every-minute job");
+assert.ok(s.source_caption.includes("Tsujita"));
+await new Promise((res) => setTimeout(res, 3000));
+const tick = await fetch(`${BASE}/cdn-cgi/handler/scheduled?cron=*+*+*+*+*`);
+assert.equal(tick.status, 200);
+assert.equal(await shareOf(), undefined, "the every-minute job finished it");
+const apifyCalls = await fetch(`${MOCK}/__calls`).then((x) => x.json());
+assert.equal(apifyCalls["data-slayer~instagram-post-details SLOW1"], 1, "the reel was read from Apify once");
+step("hands a slow reel to the every-minute job, which finishes it without paying Apify again");
 
 console.log(`\nAll end-to-end checks passed (${MODE}).`);

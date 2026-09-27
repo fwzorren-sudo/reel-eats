@@ -30,6 +30,33 @@ export function ruleTags(text: string): string[] {
   return TAG_RULES.filter(([re]) => re.test(hay)).map(([, tag]) => tag);
 }
 
+/** Loose evidence for each tag. A tag from AI is kept only when the post has one of these words. */
+const TAG_EVIDENCE: Record<string, RegExp> = {
+  "date night": /\bdate|romantic|anniversary|intimate|candle/,
+  "coffee date": /coffee|latte|espresso|matcha/,
+  brunch: /brunch/,
+  "work-friendly": /\bwork|laptop|wi-?fi|study/,
+  "outdoor seating": /outdoor|outside|patio|terrace|garden|al fresco/,
+  rooftop: /roof/,
+  views: /\bviews?\b|skyline|overlook/,
+  "late night": /late|midnight|after dark|\b24\/7|\b[1-4] ?am\b/,
+  "quick bite": /quick|grab|on the go|to-?go|counter/,
+  "cheap eats": /cheap|budget|affordable|under \$|\$\d\b|deal/,
+  splurge: /splurge|fine dining|tasting menu|omakase|michelin|pricey|expensive|special occasion|treat yourself/,
+  "family-friendly": /kid|family|children|stroller/,
+  groups: /group|party|parties|crowd|birthday|friends/,
+  "dog-friendly": /\bdogs?\b|pup|pet/,
+  "vegetarian-friendly": /vegan|vegetarian|plant/,
+  cocktails: /cocktail|drinks?\b|martini|margarita|speakeasy|mixolog|spritz|\bbar\b/,
+  "live music": /music|\bband\b|jazz|\bdj\b|concert/,
+  takeout: /take-?out|takeaway|to-?go|pick-?up|delivery/,
+};
+
+export function supportedTags(tags: string[], text: string): string[] {
+  const hay = text.toLowerCase();
+  return tags.filter((t) => TAG_EVIDENCE[t]?.test(hay) ?? false);
+}
+
 /** Google's price level says something too. Most cafes and bakeries are "$", so it means little there. */
 export function priceTags(priceLevel: string | null | undefined, category = ""): string[] {
   if (priceLevel === "$$$$") return ["splurge"];
@@ -56,11 +83,12 @@ export function ruleGoSoon(text: string): string {
   const hay = text.toLowerCase();
   const until = text.match(UNTIL)?.[1]?.replace(/\s+/g, " ");
   const withDate = (label: string) => (until ? `${label} through ${until}` : label);
-  if (/\bpop[- ]?ups?\b/.test(hay)) return withDate("Pop-up");
+  if (/\bpop[- ]?ups?\b|\btake ?overs?\b|\btaken over\b/.test(hay)) return withDate("Pop-up");
+  if (/\bhalloween\b|\bspooky season\b|\bchristmas\b|\bholiday (?:season|menu|pop)|\bvalentine/.test(hay)) return withDate("Seasonal");
   if (/\blimited[- ]time\b|\bseasonal\b|\bthis (?:week|weekend|month) only\b|\bonly (?:until|through|till)\b|\bfor a limited\b|\bwhile (?:it|they) lasts?\b/.test(hay)) {
     return withDate("Limited time");
   }
-  if (/\b(?:just|newly|recently) opened\b|\bbrand[- ]new\b|\bgrand opening\b|\bnow open\b|\bnew (?:location|spot|opening)\b|\bsoft[- ]open|\bjust opened\b|\bopening (?:day|week)\b/.test(hay)) {
+  if (/\b(?:just|newly|recently) opened\b|\bbrand[- ]new\b|\bgrand opening\b|\bnow open\b|\bnew (?:location|spot|opening)\b|\bsoft[- ]open|\bjust opened\b|\bopening (?:day|week)\b|\bopens? (?:today|tomorrow|this week(?:end)?)\b/.test(hay)) {
     return "New opening";
   }
   return "";

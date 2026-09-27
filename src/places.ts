@@ -158,12 +158,16 @@ const FOOD_TYPES = new Set([
   "ice_cream_shop", "dessert_shop", "donut_shop", "bagel_shop", "sandwich_shop", "deli", "juice_shop",
   "tea_house", "food_court", "confectionery", "chocolate_shop", "candy_store", "cafeteria", "diner",
   "bistro", "brewpub", "beer_garden", "brewery", "winery", "cat_cafe", "dog_cafe", "acai_shop",
-  "food_truck", "night_club",
+  "food_truck", "night_club", "steak_house", "bar_and_grill", "chocolate_factory", "coffee_roastery",
+  "coffee_stand", "tea_store", "pastry_shop", "cake_shop", "cupcake_shop",
 ]);
 
-/** Is this Google result a food or drink business, as opposed to a city, park or person? */
+/**
+ * Is this Google result a food or drink business, as opposed to a city, park, person or shop?
+ * Only restaurant, bar and cafe types match by suffix; "_shop" would also match barber_shop.
+ */
 export function isFoodPlace(c: Pick<PlaceCandidate, "primaryType" | "types">): boolean {
-  return [c.primaryType, ...c.types].some((t) => t && (FOOD_TYPES.has(t) || /_(restaurant|bar|shop|cafe)$/.test(t)));
+  return [c.primaryType, ...c.types].some((t) => t && (FOOD_TYPES.has(t) || /_(restaurant|bar|cafe)$/.test(t)));
 }
 
 const CATEGORY_RULES: [RegExp, Category][] = [

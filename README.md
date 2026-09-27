@@ -155,7 +155,7 @@ Install the app from Chrome as in setup step 7. After that, **Reel Eats** appear
 - **Google My Maps**: **Google My Maps (KML)** in Settings downloads a file. In Google My Maps, create a map, tap **Import**, and pick it. Each pin has the category, status, tags, reel and Google Maps link, so My Maps can color pins by category.
 - **Backups**: Settings also exports the whole list as CSV or JSON.
 
-Every 10 minutes the Worker also finishes any share whose background job was cut short, so a reel you shared still lands even if you never open the app.
+Every minute the Worker also finishes any share whose background job was cut short, so a reel you shared still lands within a minute or two even if you never open the app. Background work gets only 30 seconds on Cloudflare, so when Apify is slow to read a reel, the rest of the work is handed to that job instead of being cut off halfway.
 
 ### What's kept for each reel
 
@@ -166,7 +166,7 @@ Everything goes into your D1 database:
 - a copy of the cover image, since Instagram's image links stop working after a few days
 - every place the reel led to, with a link back to the reel
 
-Reels saved before the transcript and raw results were collected can be read again with `POST /api/shares/<id>/reread`, using the owner's access code. That costs one Apify read.
+`POST /api/shares/<id>/reread`, with the owner's access code, runs a saved reel through the current rules and Workers AI again and fills in what its places are missing, such as dishes and tags. It reuses the stored Apify results, so it's free. Add the JSON body `{"fresh": true}` to read the reel from Apify again, which costs one Apify read; reels saved before raw results were kept need that.
 
 ## Settings you can change
 
@@ -220,7 +220,7 @@ npm run typecheck
 ```sh
 node test/e2e/mock-upstreams.mjs 8799 &
 npx wrangler d1 migrations apply reel-eats --local -c test/e2e/wrangler.e2e.jsonc
-npx wrangler dev -c test/e2e/wrangler.e2e.jsonc --var APP_TOKEN:test-code \
+npx wrangler dev -c test/e2e/wrangler.e2e.jsonc --test-scheduled --var APP_TOKEN:test-code \
   --var GOOGLE_MAPS_API_KEY:test-google-key --var PLACES_BASE_URL:http://127.0.0.1:8799 \
   --var APIFY_TOKEN:test-apify --var APIFY_BASE_URL:http://127.0.0.1:8799 &
 MODE=rules node test/e2e/smoke.mjs
@@ -228,7 +228,7 @@ MODE=rules node test/e2e/smoke.mjs
 
 To test the Claude path, add `--var ANTHROPIC_API_KEY:sk-test --var ANTHROPIC_BASE_URL:http://127.0.0.1:8799` to `wrangler dev`, start with a fresh local database, and run with `MODE=claude`.
 
-To run the scheduled jobs locally, open `http://localhost:8787/cdn-cgi/handler/scheduled?cron=17+8+*+*+*` for the daily job, or `?cron=*/10+*+*+*+*` for the 10-minute one.
+To run the scheduled jobs locally, open `http://localhost:8787/cdn-cgi/handler/scheduled?cron=17+8+*+*+*` for the daily job, or `?cron=*+*+*+*+*` for the every-minute one.
 
 ### Layout
 

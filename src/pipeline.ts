@@ -195,13 +195,9 @@ interface Located {
   branches: PlaceCandidate[];
 }
 
+/** Look every name up at once; one at a time was too slow to finish in the background. */
 async function locateAll(env: Env, list: ExtractedPlace[], home: Home | null): Promise<Located[]> {
-  const out: Located[] = [];
-  for (const place of list.slice(0, 8)) {
-    const r = await locate(env, place, home);
-    out.push({ place, ...r });
-  }
-  return out;
+  return Promise.all(list.slice(0, 8).map(async (place) => ({ place, ...(await locate(env, place, home)) })));
 }
 
 /** A share processed before already has the reel's details stored. Rebuild them instead of paying Apify again. */
@@ -256,8 +252,26 @@ export const parseList = (s: string | null | undefined): string[] => {
   }
 };
 
-export async function processShare(env: Env, shareId: string): Promise<SaveResult> {
+/** Keep the cover image as soon as it's saved, so a save that's cut short doesn't lose it. */
+function keepPhoto(db: D1Database, share: ShareRow, url: string | null | undefined): Promise<string | null> {
+  if (share.photo_key || !url) return Promise.resolve(share.photo_key);
+  return saveImageFromUrl(db, url).then(async (key) => {
+    if (key) await updateShare(db, share.id, { photo_key: key });
+    return key;
+  });
+}
+
+export interface ProcessOptions {
+  /**
+   * In the background there are 30 seconds in all. If reading the reel took longer than this,
+   * stop once it's stored and leave the rest to the next scheduled run, which has minutes.
+   */
+  deferAfterMs?: number;
+}
+
+export async function processShare(env: Env, shareId: string, opts: ProcessOptions = {}): Promise<SaveResult> {
   const db = env.DB;
+  const started = Date.now();
   const share = await claimShare(db, shareId);
   if (!share) {
     const current = await getShare(db, shareId);
@@ -266,11 +280,11 @@ export async function processShare(env: Env, shareId: string): Promise<SaveResul
 
   try {
     let meta: SourceMeta | null = storedMeta(share);
-    let photo: Promise<string | null> = Promise.resolve(share.photo_key);
+    let photo = keepPhoto(db, share, meta?.thumbnail);
     if (share.source_url && !meta) {
       meta = await fetchSourceMeta(share.source_url, env);
       if (meta.apifyError) await noteApifyProblem(db, meta.apifyError);
-      if (!share.photo_key) photo = saveImageFromUrl(db, meta.thumbnail);
+      photo = keepPhoto(db, share, meta.thumbnail);
       await updateShare(db, share.id, {
         source_author: meta.author || null,
         source_caption: meta.caption || null,
@@ -280,7 +294,14 @@ export async function processShare(env: Env, shareId: string): Promise<SaveResul
         transcript: meta.transcript || null,
         posted_at: meta.postedAt ?? null,
         source_location: meta.location ? JSON.stringify({ ...meta.location, name: meta.locationName }) : null,
+        // The reel is stored now; a retry won't pay Apify again, so it can start sooner.
+        claimed_at: Date.now(),
       });
+      if (opts.deferAfterMs && Date.now() - started > opts.deferAfterMs) {
+        await photo;
+        await updateShare(db, share.id, { status: "pending", claimed_at: null });
+        return { status: "busy", share: await getShare(db, share.id), places: [], duplicates: [], message: "Saved. Finding the restaurant now." };
+      }
     }
 
     const home = await getHome(db);
@@ -294,9 +315,7 @@ export async function processShare(env: Env, shareId: string): Promise<SaveResul
     const anyFound = located.some((l) => l.best);
     const keep = located.filter((l) => l.best || l.place.keep_unresolved);
 
-    const photoKey = await photo;
-    if (photoKey && photoKey !== share.photo_key) await updateShare(db, share.id, { photo_key: photoKey });
-    share.photo_key = photoKey;
+    share.photo_key = await photo;
 
     if (!keep.length) {
       const why = reason || (fromClaude ? "" : "Couldn't find a restaurant from this post on Google Maps.") || "Couldn't tell which restaurant this is.";
@@ -328,7 +347,8 @@ export async function processShare(env: Env, shareId: string): Promise<SaveResul
       if (!best && anyFound && !fromClaude) continue;
       const category = best && p.category_from_google ? categoryFor(best, p.cuisine) : p.category;
       const tags = cleanTags(p.tags, postTags, priceTags(best?.priceLevel, category));
-      const goSoon = p.go_soon || postGoSoon || null;
+      // A pop-up or seasonal note from the rules is more specific than AI's "now open".
+      const goSoon = (postGoSoon && postGoSoon !== "New opening" ? postGoSoon : "") || p.go_soon || postGoSoon || null;
       const handle = p.instagram_handle || handleFor(best?.name ?? p.name, meta) || null;
 
       const existing = best ? await findPlaceByBranch(db, [best.id, ...branches.map((b) => b.id)]) : await findUnlocatedByName(db, p.name);
@@ -395,44 +415,58 @@ export async function processShare(env: Env, shareId: string): Promise<SaveResul
 }
 
 /**
- * Read a reel again with the current readers and fill in what the saved places are missing:
- * the transcript and raw results, cover image, Instagram account, post date, tags and "go soon".
- * For reels saved before these were collected. The places themselves aren't looked up again.
+ * Run a saved reel through the current readers again and fill in what its places are missing:
+ * dishes, summary, cover image, Instagram account, post date, tags and "go soon". The places
+ * themselves aren't looked up again. The stored Apify results are reused, so it's free, unless
+ * `fresh` is set or nothing was stored; reels saved before raw results were kept need `fresh`.
  */
-export async function rereadShare(env: Env, share: ShareRow): Promise<{ via: string; transcript: boolean; places: PlaceRow[] }> {
+export async function rereadShare(
+  env: Env,
+  share: ShareRow,
+  { fresh = false }: { fresh?: boolean } = {},
+): Promise<{ via: string; transcript: boolean; places: PlaceRow[] }> {
   const db = env.DB;
   if (!share.source_url) return { via: "none", transcript: false, places: [] };
-  const meta = await fetchSourceMeta(share.source_url, env);
+  const stored = !fresh && share.raw_post ? storedMeta(share) : null;
+  const meta = stored ?? (await fetchSourceMeta(share.source_url, env));
   if (meta.apifyError) await noteApifyProblem(db, meta.apifyError);
   const photoKey = share.photo_key || (await saveImageFromUrl(db, meta.thumbnail || share.source_thumb));
-  await updateShare(db, share.id, {
-    source_author: meta.author || share.source_author,
-    source_caption: meta.caption || share.source_caption,
-    source_thumb: meta.thumbnail || share.source_thumb,
-    raw_post: meta.raw ?? share.raw_post,
-    raw_transcript: meta.rawTranscript ?? share.raw_transcript,
-    transcript: meta.transcript || share.transcript,
-    posted_at: meta.postedAt ?? share.posted_at,
-    source_location: meta.location ? JSON.stringify({ ...meta.location, name: meta.locationName }) : share.source_location,
-    photo_key: photoKey,
-  });
-  const fresh = { ...share, photo_key: photoKey, posted_at: meta.postedAt ?? share.posted_at };
+  if (!stored) {
+    await updateShare(db, share.id, {
+      source_author: meta.author || share.source_author,
+      source_caption: meta.caption || share.source_caption,
+      source_thumb: meta.thumbnail || share.source_thumb,
+      raw_post: meta.raw ?? share.raw_post,
+      raw_transcript: meta.rawTranscript ?? share.raw_transcript,
+      transcript: meta.transcript || share.transcript,
+      posted_at: meta.postedAt ?? share.posted_at,
+      source_location: meta.location ? JSON.stringify({ ...meta.location, name: meta.locationName }) : share.source_location,
+    });
+  }
+  if (photoKey !== share.photo_key) await updateShare(db, share.id, { photo_key: photoKey });
+  const current = { ...share, photo_key: photoKey, posted_at: meta.postedAt ?? share.posted_at };
 
   const { results: places } = await db.prepare("SELECT * FROM places WHERE share_id = ?").bind(share.id).all<PlaceRow>();
   const text = [meta.caption, meta.transcript, share.shared_text].filter(Boolean).join("\n");
   const single = places.length === 1;
   const ai = engineFor(env) === "workers-ai" ? await extractWithWorkersAI(env, meta, share.shared_text) : [];
-  const source = sourceFields(fresh, meta);
+  const source = sourceFields(current, meta);
+  const ruled = single ? ruleGoSoon(text) : "";
   const updated: PlaceRow[] = [];
   for (const p of places) {
     const match = ai.find((a) => namesMatch(p.name, a.name) || namesMatch(a.name, p.name));
     const tags = cleanTags(parseList(p.tags), match?.tags, single ? ruleTags(text) : [], priceTags(p.price_level, p.category));
+    const dishes = parseList(p.dishes);
     const row = await updatePlace(db, p.id, {
       tags: JSON.stringify(tags),
-      go_soon: p.go_soon || match?.go_soon || (single ? ruleGoSoon(text) : "") || null,
+      go_soon: (ruled && ruled !== "New opening" ? ruled : "") || p.go_soon || match?.go_soon || ruled || null,
       instagram_handle: p.instagram_handle || match?.instagram_handle || handleFor(p.name, meta) || null,
       posted_at: p.posted_at ?? source.posted_at,
       photo_key: p.photo_key || photoKey,
+      dishes: JSON.stringify(dishes.length ? dishes : (match?.dishes ?? [])),
+      // The caption's first line stands in when AI had nothing; AI's summary is better.
+      summary: (match?.summary && (!p.summary || p.summary === captionSummary(meta.caption)) ? match.summary : p.summary) || null,
+      cuisine: p.cuisine || match?.cuisine || null,
     });
     if (source.source_url || source.source_caption) {
       await addSource(db, p.id, source);
@@ -446,7 +480,7 @@ export async function rereadShare(env: Env, share: ShareRow): Promise<{ via: str
     }
     if (row) updated.push(row);
   }
-  return { via: meta.via, transcript: !!meta.transcript, places: updated };
+  return { via: stored ? "stored" : meta.via, transcript: !!meta.transcript, places: updated };
 }
 
 /** Re-run the branch search for a saved place, for example after moving house. */

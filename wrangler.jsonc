@@ -23,10 +23,10 @@
   ],
   // Cloudflare Workers AI reads captions. It comes with the Cloudflare account; no key needed.
   "ai": { "binding": "AI" },
-  // Every 10 minutes: finish any share whose background job was cut short.
+  // Every minute: finish a share whose background job was cut short or handed over.
   // Daily at 08:17 UTC: re-check places with Google (closures, hours), check Apify credit.
   // If you change the daily time, change DAILY_CRON in src/upkeep.ts to match.
-  "triggers": { "crons": ["*/10 * * * *", "17 8 * * *"] },
+  "triggers": { "crons": ["* * * * *", "17 8 * * *"] },
   "vars": {
     // Workers AI model that reads captions, or "off" to use rules only.
     "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
