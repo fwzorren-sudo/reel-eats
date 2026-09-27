@@ -16,8 +16,8 @@
     {
       "binding": "DB",
       "database_name": "reel-eats",
-      // Paste the id printed by `npx wrangler d1 create reel-eats`.
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      // Created by `npx wrangler d1 create reel-eats`. Replace it if you deploy to a different account.
+      "database_id": "4a98612a-9281-46bc-99a9-9af8aee08f45",
       "migrations_dir": "migrations"
     }
   ],

@@ -124,6 +124,16 @@ async function plan(env: Env, share: ShareRow, meta: SourceMeta | null): Promise
   const ai = engine === "workers-ai" ? await extractWithWorkersAI(env, meta, share.shared_text) : [];
   for (const c of ai) if (!c.city && rules.cityHint) c.city = rules.cityHint;
   const primary = dedupe([...ai, ...rules.primary]);
+  // Shows up in Cloudflare's Worker logs; handy when a reel lands on the wrong place.
+  console.log(
+    JSON.stringify({
+      share: share.id,
+      via: meta?.via ?? "none",
+      ai: ai.map((c) => c.name),
+      rules: rules.primary.map((c) => c.name),
+      fallback: rules.fallback.map((c) => c.name),
+    }),
+  );
 
   let reason = "";
   if (!meta?.caption && !share.shared_text && share.image_base64) {
