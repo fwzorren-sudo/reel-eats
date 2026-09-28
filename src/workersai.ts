@@ -16,6 +16,7 @@ Rules:
 - Food creators, influencers and friends are not venues. Nor is a market, mall, food hall or other business the venue is inside or next to, or an account credited as the organizer, unless the post recommends eating or drinking there too.
 - A list post ("top 5 tacos") has one entry per venue.
 - city is the city or neighborhood of the venue if the post says it, otherwise empty.
+- summary: one short sentence, in your own words, on why the post recommends the venue.
 - tags: at most 4, each used once, only from this list: ${TAGS.join(", ")}. Use a tag only when the post says it outright, for example "live music" only if the post mentions music. Don't guess from price or looks. Empty when unsure.
 - go_soon: a few words if the post says the venue just opened, is a pop-up, or has something seasonal or for a limited time, for example "New opening" or "Pop-up through Oct 12". Otherwise empty.
 - If the post names no venue, return an empty list.

@@ -373,3 +373,17 @@ describe("the Instagram handle and the venue's website (reels from Sep 27)", () 
     expect(closestHandle("CT", ["ct"])).toBe("");
   });
 });
+
+describe("categories when Google only says restaurant (reels from Sep 28)", () => {
+  const generic = (name: string) => toCandidate(raw("x", name, 33.9, -84.3, { primaryType: "restaurant", types: ["restaurant", "food"] }), null);
+  it("uses the dishes before the name", () => {
+    expect(categoryFor(generic("Cuddlefish"), "", ["sushi", "temaki"])).toBe("Japanese & Sushi");
+  });
+  it("falls back to the post's opening line", () => {
+    expect(categoryFor(generic("Hamp & Harry's"), "", [], "pov: you find a Wizardry Themed Pop - Up Bar just north of Atlanta!")).toBe("Bar & Drinks");
+  });
+  it("names a single branch without Google's branch suffix", () => {
+    const h = generic("Habaneros | Midtown");
+    expect(businessName(h, [h])).toBe("Habaneros");
+  });
+});

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { captionSummary, handleToName, noteCandidate, pinnedPlaces, ruleCandidates } from "../src/identify";
+import { candidate, captionSummary, handleToName, noteCandidate, pinnedPlaces, ruleCandidates } from "../src/identify";
 import { emptyMeta, mapApifyItem } from "../src/source";
 import type { SourceMeta } from "../src/types";
 
@@ -106,5 +106,21 @@ describe("a real reel caption from Apify", () => {
 describe("calls to action", () => {
   it.each(["📌 Save this for your next date night", "📌 SHARE with a friend", "📍 Follow @eats for more", "📌 Tag someone"])("ignores %s", (line) => {
     expect(pinnedPlaces(line)).toEqual([]);
+  });
+});
+
+describe("handles and summaries (reels from Sep 28)", () => {
+  it("drops a handle AI made up, and keeps one the post has", async () => {
+    const { attachHandles } = await import("../src/identify");
+    const { emptyMeta } = await import("../src/source");
+    const made = candidate("Habaneros", { instagram_handle: "habanerosatl", alt_names: ["habanerosatl"] });
+    const real = candidate("Melt N Dip", { instagram_handle: "meltndip.atl", alt_names: ["meltndip.atl"] });
+    attachHandles([made, real], { ...emptyMeta("x"), author: "kaiafumbah", mentions: ["meltndip.atl"] });
+    expect(made.instagram_handle).toBe("");
+    expect(made.alt_names).toEqual([]);
+    expect(real.instagram_handle).toBe("meltndip.atl");
+  });
+  it("skips a one-word banner line for the summary", () => {
+    expect(captionSummary("☀️ ATLANTA ☀️\n\nLooking for a date night you’ll actually remember? 🧪💙")).toBe("Looking for a date night you’ll actually remember?");
   });
 });

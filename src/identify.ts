@@ -117,7 +117,8 @@ export function captionSummary(caption: string): string {
           .replace(/\s+([.,!?])/g, "$1")
           .trim(),
       )
-      .find((l) => /\p{L}{3,}/u.test(l) && !PIN.test(l)) ?? "";
+      // Skip banner lines like "☀️ ATLANTA ☀️"; a summary needs a few words.
+      .find((l) => /\p{L}{3,}/u.test(l) && !PIN.test(l) && (l.match(/\p{L}{2,}/gu)?.length ?? 0) >= 3) ?? "";
   const sentence = firstLine.split(/(?<=[.!?])\s/)[0] ?? "";
   return sentence.length > 160 ? `${sentence.slice(0, 157).trimEnd()}…` : sentence;
 }
@@ -200,9 +201,17 @@ export function closestHandle(name: string, handles: string[]): string {
 /** Give each AI or Claude name the post's matching @handle, so Google results can be checked against it. */
 export function attachHandles(list: ExtractedPlace[], meta: SourceMeta | null): void {
   if (!meta) return;
-  const handles = [...meta.tagged.map((t) => t.username), ...meta.mentions];
+  const handles = [...meta.tagged.map((t) => t.username), ...meta.mentions, meta.author].filter(Boolean);
+  const inPost = new Set(handles.map(compact));
   for (const c of list) {
-    const h = c.instagram_handle || closestHandle(c.name, handles);
+    // AI sometimes makes up a handle from the name (@habanerosatl). Only the post's own count.
+    const given = c.instagram_handle && inPost.has(compact(c.instagram_handle)) ? c.instagram_handle : "";
+    if (c.instagram_handle && !given) {
+      const made = compact(c.instagram_handle);
+      c.alt_names = c.alt_names.filter((a) => compact(a) !== made);
+      c.instagram_handle = "";
+    }
+    const h = given || closestHandle(c.name, handles);
     if (!h) continue;
     c.instagram_handle = h;
     if (!c.alt_names.some((a) => compact(a) === compact(h))) c.alt_names = [...c.alt_names, h];

@@ -91,3 +91,14 @@ describe("cheap eats", () => {
     expect(supportedTags(["cheap eats"], "Tacos under $5, the best cheap eats in town")).toEqual(["cheap eats"]);
   });
 });
+
+describe("the reels from Sep 28", () => {
+  it("doesn't call a regular lunch deal with a seasonal pastry limited-time", () => {
+    const cuddlefish = "WEEKDAY SUSHI LUNCH SPECIAL FOR JUST $19.99 🍣\n✨ Seasonal Pastry/Dessert (ours was a matcha cookie!)\nThe deal is offered every weekday from 11 AM - 3 PM, so make sure to check them out soon and grab a matcha";
+    expect(ruleGoSoon(cuddlefish)).toBe("");
+    expect(supportedTags(["quick bite"], cuddlefish)).toEqual([]);
+  });
+  it("reads 'through the end of October' as the pop-up's end", () => {
+    expect(ruleGoSoon("Wizardry Themed Pop - Up Bar ... every Wednesday and Thursday through the end of October!")).toBe("Pop-up through October");
+  });
+});

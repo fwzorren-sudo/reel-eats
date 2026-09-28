@@ -40,7 +40,7 @@ const TAG_EVIDENCE: Record<string, RegExp> = {
   rooftop: /roof/,
   views: /\bviews?\b|skyline|overlook/,
   "late night": /late|midnight|after dark|\b24\/7|\b[1-4] ?am\b/,
-  "quick bite": /quick|grab|on the go|to-?go|counter/,
+  "quick bite": /quick (?:bite|lunch|stop|meal)|grab[- ]and[- ]go|on the go|counter[- ]service|fast[- ]casual/,
   "cheap eats": /cheap|budget|affordable|under \$\d|inexpensive/,
   splurge: /splurge|fine dining|tasting menu|omakase|michelin|pricey|expensive|special occasion|treat yourself/,
   "family-friendly": /kid|family|children|stroller/,
@@ -74,6 +74,7 @@ export function cleanTags(...lists: (unknown[] | null | undefined)[]): string[] 
 
 const MONTH = "(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?";
 const UNTIL = new RegExp(`\\b(?:until|through|thru|till|til|ends?|ending)\\s+(${MONTH}\\s+\\d{1,2}(?:st|nd|rd|th)?|\\d{1,2}\\/\\d{1,2})`, "i");
+const UNTIL_MONTH = new RegExp(`\\b(?:until|through|thru|till|ends?|ending)\\s+(?:the\\s+end\\s+of\\s+)?(${MONTH})(?![a-z])`, "i");
 
 /** A pop-up, seasonal or limited-time note: tied to one branch and a window of time, unlike "New opening". */
 export function isEventNote(note: string | null | undefined): boolean {
@@ -94,11 +95,12 @@ export function oneLocationOnly(text: string): boolean {
  */
 export function ruleGoSoon(text: string): string {
   const hay = text.toLowerCase();
-  const until = text.match(UNTIL)?.[1]?.replace(/\s+/g, " ");
+  const month = text.match(UNTIL_MONTH)?.[1];
+  const until = text.match(UNTIL)?.[1]?.replace(/\s+/g, " ") ?? (month ? month[0].toUpperCase() + month.slice(1).toLowerCase() : undefined);
   const withDate = (label: string) => (until ? `${label} through ${until}` : label);
-  if (/\bpop[- ]?ups?\b|\btake ?overs?\b|\btaken over\b/.test(hay)) return withDate("Pop-up");
+  if (/\bpop\s*-?\s*ups?\b|\btake ?overs?\b|\btaken over\b/.test(hay)) return withDate("Pop-up");
   if (/\bhalloween\b|\bspooky season\b|\bchristmas\b|\bholiday (?:season|menu|pop)|\bvalentine/.test(hay)) return withDate("Seasonal");
-  if (/\blimited[- ]time\b|\bseasonal\b|\bthis (?:week|weekend|month) only\b|\bonly (?:until|through|till)\b|\bfor a limited\b|\bwhile (?:it|they) lasts?\b/.test(hay)) {
+  if (/\blimited[- ]time\b|\b(?:available|served|offered|here|running) (?:only )?(?:until|through|thru|till)\b|\bthis (?:week|weekend|month) only\b|\bonly (?:until|through|till)\b|\bfor a limited\b|\bwhile (?:it|they) lasts?\b/.test(hay)) {
     return withDate("Limited time");
   }
   if (/\b(?:just|newly|recently) opened\b|\bbrand[- ]new\b|\bgrand opening\b|\bnow open\b|\bnew (?:location|spot|opening)\b|\bsoft[- ]open|\bjust opened\b|\bopening (?:day|week)\b|\bopens? (?:today|tomorrow|this week(?:end)?)\b/.test(hay)) {

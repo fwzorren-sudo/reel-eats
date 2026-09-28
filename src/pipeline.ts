@@ -99,7 +99,8 @@ export async function locate(
  * ("Shake Shack" from "Shake Shack Herald Square" and "Shake Shack Grand Central").
  */
 export function businessName(best: PlaceCandidate, branches: PlaceCandidate[]): string {
-  if (branches.length < 2) return best.name;
+  // "Habaneros | Midtown": what follows " | " names the branch.
+  if (branches.length < 2) return best.name.split(" | ")[0].trim() || best.name;
   const split = branches.map((b) => b.name.split(/\s+/));
   const shared: string[] = [];
   for (let i = 0; i < split[0].length; i++) {
@@ -392,7 +393,8 @@ async function processTraced(env: Env, shareId: string, opts: ProcessOptions, tr
       if (best && seenGoogle.has(best.id)) continue;
       if (best) seenGoogle.add(best.id);
       if (!best && anyFound && !fromClaude) continue;
-      const category = best && p.category_from_google ? categoryFor(best, p.cuisine) : p.category;
+      const opening = single ? (meta?.caption || share.shared_text || "").slice(0, 200) : "";
+      const category = best && p.category_from_google ? categoryFor(best, p.cuisine, p.dishes, opening) : p.category;
       const tags = cleanTags(p.tags, postTags, priceTags(best?.priceLevel, category));
       // A pop-up or seasonal note from the rules is more specific than AI's "now open".
       const goSoon = (postGoSoon && postGoSoon !== "New opening" ? postGoSoon : "") || p.go_soon || postGoSoon || null;

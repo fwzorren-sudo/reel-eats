@@ -225,10 +225,16 @@ export function guessCategory(texts: (string | null | undefined)[]): Category {
   return "Other";
 }
 
-export function categoryFor(c: PlaceCandidate, cuisine = ""): Category {
-  const fromPrimary = guessCategory([c.primaryType, c.typeLabel]);
-  if (fromPrimary !== "Other") return fromPrimary;
-  return guessCategory([cuisine, c.name, ...c.types]);
+/**
+ * Google's type first. When it only says "restaurant", the cuisine and dishes from the post,
+ * then the name, then the post's opening line ("Wizardry Themed Pop-Up Bar").
+ */
+export function categoryFor(c: PlaceCandidate, cuisine = "", dishes: string[] = [], postOpening = ""): Category {
+  for (const texts of [[c.primaryType, c.typeLabel], [cuisine, ...dishes], [c.name, ...c.types], [postOpening]]) {
+    const guess = guessCategory(texts);
+    if (guess !== "Other") return guess;
+  }
+  return "Other";
 }
 
 export function cuisineFor(c: PlaceCandidate): string {
