@@ -84,3 +84,10 @@ describe("offers at one location", () => {
     expect(oneLocationOnly("The only thing better than the tacos is the location")).toBe(false);
   });
 });
+
+describe("cheap eats", () => {
+  it("needs the post to say it's cheap, not just mention a price", () => {
+    expect(supportedTags(["cheap eats"], "For just $40, enjoy an all-you-can-eat spread. Mimosas are just $5")).toEqual([]);
+    expect(supportedTags(["cheap eats"], "Tacos under $5, the best cheap eats in town")).toEqual(["cheap eats"]);
+  });
+});

@@ -41,7 +41,7 @@ const TAG_EVIDENCE: Record<string, RegExp> = {
   views: /\bviews?\b|skyline|overlook/,
   "late night": /late|midnight|after dark|\b24\/7|\b[1-4] ?am\b/,
   "quick bite": /quick|grab|on the go|to-?go|counter/,
-  "cheap eats": /cheap|budget|affordable|under \$|\$\d\b|deal/,
+  "cheap eats": /cheap|budget|affordable|under \$\d|inexpensive/,
   splurge: /splurge|fine dining|tasting menu|omakase|michelin|pricey|expensive|special occasion|treat yourself/,
   "family-friendly": /kid|family|children|stroller/,
   groups: /group|party|parties|crowd|birthday|friends/,
