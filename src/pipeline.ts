@@ -395,7 +395,7 @@ async function processTraced(env: Env, shareId: string, opts: ProcessOptions, tr
       if (!best && anyFound && !fromClaude) continue;
       const opening = single ? (meta?.caption || share.shared_text || "").slice(0, 200) : "";
       const category = best && p.category_from_google ? categoryFor(best, p.cuisine, p.dishes, opening) : p.category;
-      const tags = cleanTags(p.tags, postTags, priceTags(best?.priceLevel, category));
+      const tags = cleanTags(p.tags, postTags, priceTags(best?.priceLevel));
       // A pop-up or seasonal note from the rules is more specific than AI's "now open".
       const goSoon = (postGoSoon && postGoSoon !== "New opening" ? postGoSoon : "") || p.go_soon || postGoSoon || null;
       const handle = p.instagram_handle || handleFor(best?.name ?? p.name, meta) || null;
@@ -523,7 +523,7 @@ export async function rereadShare(
   const updated: PlaceRow[] = [];
   for (const p of places) {
     const match = ai.find((a) => namesMatch(p.name, a.name) || namesMatch(a.name, p.name));
-    const tags = cleanTags(parseList(p.tags), match?.tags, single ? ruleTags(text) : [], priceTags(p.price_level, p.category));
+    const tags = cleanTags(parseList(p.tags), match?.tags, single ? ruleTags(text) : [], priceTags(p.price_level));
     const dishes = parseList(p.dishes);
     const row = await updatePlace(db, p.id, {
       tags: JSON.stringify(tags),

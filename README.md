@@ -68,7 +68,9 @@ When nothing in the reel leads to a restaurant, the share waits in the app under
 
 **Google allowance.** Opening hours come from the same Google Places price tier as the rating and phone number Reel Eats already uses, so they add no cost of their own. The daily job re-checks each place about once a month, which uses one Place Details request per place.
 
-**Workers AI allowance.** Cloudflare includes 10,000 Workers AI "neurons" a day for free. At Cloudflare's published rates for the default Llama 3.3 70B model, one reel with its transcript uses roughly 50 to 150, so the free allowance covers about 70 reels a day.
+**Workers AI allowance.** Cloudflare includes 10,000 Workers AI "neurons" a day for free. With the default Llama 3.3 70B model, one reel with its transcript uses about 25 to 55, so the free allowance covers well over 100 reels a day.
+
+**Choosing a model.** In September 2026, 14 saved reels were run through the pipeline with every larger model the free plan offers: gpt-oss 120B and 20B, Llama 4 Scout, Llama 3.1 8B, Mistral Small 3.1, Qwen3 30B, Qwen 3.8 27B (with `chat_template_kwargs: { enable_thinking: false }`), Gemma 4 26B, GLM 4.7 Flash and Granite 4.0 Micro. None found more restaurants or needed fewer fixes than Llama 3.3, which was also among the fastest (about 3 seconds). Gemma 4 and GLM 4.7 Flash usually took longer than the 15 seconds the app waits. Kimi K2.6, DeepSeek V4 and GLM 5.3 need the Workers Paid plan. Other models don't all accept the same request: some need OpenAI-style `response_format` and `reasoning_effort`, so changing `AI_MODEL` alone may not work.
 
 ## Setup
 

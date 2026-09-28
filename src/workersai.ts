@@ -1,5 +1,5 @@
 import { candidate, locationLine } from "./identify";
-import { cleanTags, supportedTags } from "./tags";
+import { cleanTags, supportedTags, tidyGoSoon } from "./tags";
 import { currentTrace, errorText } from "./trace";
 import { TAGS, type Env, type ExtractedPlace, type SourceMeta } from "./types";
 
@@ -16,7 +16,7 @@ Rules:
 - Food creators, influencers and friends are not venues. Nor is a market, mall, food hall or other business the venue is inside or next to, or an account credited as the organizer, unless the post recommends eating or drinking there too.
 - A list post ("top 5 tacos") has one entry per venue.
 - city is the city or neighborhood of the venue if the post says it, otherwise empty.
-- summary: one short sentence, in your own words, on why the post recommends the venue.
+- summary: one full sentence of 15 to 25 words, in your own words, on why the post recommends the venue. Name the dishes or drinks it praises, plus one detail such as the neighborhood, a price or the setting. Leave out the address, opening hours and how to book; the app shows those. Don't start with the venue's name, and skip empty words like "delicious", "unique" and "recommended".
 - tags: at most 4, each used once, only from this list: ${TAGS.join(", ")}. Use a tag only when the post says it outright, for example "live music" only if the post mentions music. Don't guess from price or looks. Empty when unsure.
 - go_soon: a few words if the post says the venue just opened, is a pop-up, or has something seasonal or for a limited time, for example "New opening" or "Pop-up through Oct 12". Otherwise empty.
 - If the post names no venue, return an empty list.
@@ -131,7 +131,7 @@ export function parseAiPlaces(raw: unknown, postText = ""): ExtractedPlace[] {
         alt_names: handle ? [handle] : [],
         // Llama is loose with tags ("splurge" for any cool bar), so keep the ones the post's words back up.
         tags: supportedTags(cleanTags(Array.isArray(p.tags) ? p.tags : []), postText),
-        go_soon: str(p.go_soon, 80),
+        go_soon: tidyGoSoon(str(p.go_soon, 80)),
       });
     })
     .filter((p) => p.name);

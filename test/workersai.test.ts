@@ -103,3 +103,19 @@ describe("answers that go wrong", () => {
     expect(await result).toEqual([]);
   });
 });
+
+describe("the Sep 28 model test", () => {
+  it("words 'New location just opened' as a plain new opening", async () => {
+    const { env } = fakeAi({
+      response: { places: [{ name: "Rosetta Bakery", city: "", cuisine: "", summary: "", dishes: [], tags: [], go_soon: "New location just opened" }] },
+    });
+    const out = await extractWithWorkersAI(env, meta, null);
+    expect(out[0].go_soon).toBe("New opening");
+  });
+
+  it("asks for the dishes and a concrete detail in the summary", async () => {
+    const { env, calls } = fakeAi({ response: { places: [] } });
+    await extractWithWorkersAI(env, meta, null);
+    expect(calls[0].input.messages[0].content).toMatch(/15 to 25 words.*Name the dishes or drinks it praises, plus one detail.*Leave out the address/s);
+  });
+});

@@ -6,7 +6,7 @@ import type {
   BetaToolUnion,
 } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 import { locationLine } from "./identify";
-import { cleanTags } from "./tags";
+import { cleanTags, tidyGoSoon } from "./tags";
 import { traced } from "./trace";
 import { CATEGORIES, TAGS, type Category, type Env, type Extraction, type ExtractedPlace, type SourceMeta } from "./types";
 
@@ -144,7 +144,7 @@ export function sanitizeExtraction(raw: unknown): Extraction {
       multi_location: p.multi_location === true,
       confidence,
       tags: cleanTags(Array.isArray(p.tags) ? p.tags : []),
-      go_soon: str(p.go_soon, 80),
+      go_soon: tidyGoSoon(str(p.go_soon, 80)),
     });
   }
   return { places, reason: str(obj.reason, 400) };

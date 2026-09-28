@@ -57,11 +57,12 @@ export function supportedTags(tags: string[], text: string): string[] {
   return tags.filter((t) => TAG_EVIDENCE[t]?.test(hay) ?? false);
 }
 
-/** Google's price level says something too. Most cafes and bakeries are "$", so it means little there. */
-export function priceTags(priceLevel: string | null | undefined, category = ""): string[] {
-  if (priceLevel === "$$$$") return ["splurge"];
-  if (priceLevel === "$" && !/Coffee|Bakery|Bar/.test(category)) return ["cheap eats"];
-  return [];
+/**
+ * Google's price level, only at the top end. Its "$" covers too much, a $40 brunch buffet
+ * included, so "cheap eats" needs the post's own words.
+ */
+export function priceTags(priceLevel: string | null | undefined): string[] {
+  return priceLevel === "$$$$" ? ["splurge"] : [];
 }
 
 /** Keep only known tags, once each, in the list's order. */
@@ -80,6 +81,22 @@ const UNTIL_MONTH = new RegExp(`\\b(?:until|through|thru|till|ends?|ending)\\s+(
 export function isEventNote(note: string | null | undefined): boolean {
   if (!note || /^new opening$/i.test(note.trim())) return false;
   return /pop-?up|take ?over|taken over|limited|seasonal|through|until|only|halloween|christmas|holiday|this weekend|event/i.test(note);
+}
+
+/**
+ * "New location just opened", "Now open" and "Brand new spot" all mean the same, so they read
+ * "New opening". A soft opening, a date or an event note says more and is kept as it is.
+ */
+export function tidyGoSoon(note: string): string {
+  const text = note.trim();
+  if (!text || isEventNote(text) || /\d|\bsoon\b/i.test(text)) return text;
+  if (/\bsoft[- ]?open/i.test(text)) return "Soft opening";
+  if (
+    /\b(?:just|newly|recently|now|finally)\s+open(?:ed)?\b|\bopen(?:ed|ing)\b|\bbrand[- ]new\b|\bnew (?:location|spot|place|restaurant|cafe|café|bar|bakery|shop)\b/i.test(text)
+  ) {
+    return "New opening";
+  }
+  return text;
 }
 
 /** The post says what it shows is only at one branch: "This is only at their new Dunwoody location!" */

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { cleanTags, isEventNote, oneLocationOnly, priceTags, ruleGoSoon, ruleTags, supportedTags } from "../src/tags";
+import { cleanTags, isEventNote, oneLocationOnly, priceTags, ruleGoSoon, ruleTags, supportedTags, tidyGoSoon } from "../src/tags";
 
 const fixture = (name: string) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"))[0];
 
@@ -28,11 +28,12 @@ describe("tags from the post", () => {
     expect(cleanTags(undefined, null)).toEqual([]);
   });
 
-  it("reads Google's price level, except for cafes and bakeries", () => {
+  it("reads Google's price level only at the top end", () => {
     expect(priceTags("$$$$")).toEqual(["splurge"]);
-    expect(priceTags("$", "Tacos & Mexican")).toEqual(["cheap eats"]);
-    expect(priceTags("$", "Coffee & Cafe")).toEqual([]);
+    // CT Cantina is "$" on Google, but the reel is about a $40 brunch buffet.
+    expect(priceTags("$")).toEqual([]);
     expect(priceTags("$$")).toEqual([]);
+    expect(priceTags(null)).toEqual([]);
   });
 });
 
@@ -48,6 +49,25 @@ describe("reasons to go soon", () => {
 
   it("stays quiet otherwise", () => {
     expect(ruleGoSoon("Best tacos in Queens, been going for years")).toBe("");
+  });
+
+  it("words every plain opening the same way", () => {
+    expect(tidyGoSoon("New location just opened")).toBe("New opening");
+    expect(tidyGoSoon("Just opened")).toBe("New opening");
+    expect(tidyGoSoon("Now open")).toBe("New opening");
+    expect(tidyGoSoon("Brand new spot")).toBe("New opening");
+    expect(tidyGoSoon("Grand opening")).toBe("New opening");
+    expect(tidyGoSoon("Soft opening phase")).toBe("Soft opening");
+  });
+
+  it("keeps notes that say more than that", () => {
+    expect(tidyGoSoon("Pop-up through October")).toBe("Pop-up through October");
+    expect(tidyGoSoon("Opened Sept 18, limited menu")).toBe("Opened Sept 18, limited menu");
+    expect(tidyGoSoon("Opening soon")).toBe("Opening soon");
+    expect(tidyGoSoon("Reopened after renovation")).toBe("Reopened after renovation");
+    expect(tidyGoSoon("Open late")).toBe("Open late");
+    expect(tidyGoSoon("New fall menu")).toBe("New fall menu");
+    expect(tidyGoSoon("  ")).toBe("");
   });
 });
 
