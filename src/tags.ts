@@ -81,6 +81,13 @@ export function isEventNote(note: string | null | undefined): boolean {
   return /pop-?up|take ?over|taken over|limited|seasonal|through|until|only|halloween|christmas|holiday|this weekend|event/i.test(note);
 }
 
+/** The post says what it shows is only at one branch: "This is only at their new Dunwoody location!" */
+export function oneLocationOnly(text: string): boolean {
+  return /\b(?:only|exclusively) (?:at|available at|served at|offered at|happening at|found at) (?:their|the|our|this|that)\b[^.!?\n]{0,40}\blocations?\b|\bexclusive to (?:their|the|our|this)\b[^.!?\n]{0,40}\blocation\b|\b(?:this|that|one) location only\b|\bonly (?:this|one) location\b/i.test(
+    text,
+  );
+}
+
 /**
  * A reason to go soon, when the post says the place just opened, is a pop-up, or has
  * something for a limited time. Returns "" when there's none.

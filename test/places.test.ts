@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { brandQuery, categoryFor, cuisineFor, guessCategory, isFoodPlace, PlacesClient, resolveBranch, toCandidate } from "../src/places";
 import { businessName } from "../src/pipeline";
-import { CITY_RADIUS_M, ruleCandidates } from "../src/identify";
+import { attachHandles, CITY_RADIUS_M, closestHandle, ruleCandidates } from "../src/identify";
+import { emptyMeta } from "../src/source";
 import { mapApifyItem } from "../src/source";
 import { readFileSync } from "node:fs";
 import { distanceMeters } from "../src/geo";
@@ -324,5 +325,51 @@ describe("the branch in the reel", () => {
     mockGoogle({ "Tin Lizzy's Cantina": [downtown, midtown] });
     const res = await resolveBranch(client, place({ name: "Tin Lizzy's Cantina", search_query: "Tin Lizzy's Cantina" }), { address: "x", lat: 33.58, lng: -85.08 });
     expect(res?.filmed).toBeNull();
+  });
+});
+
+describe("the Instagram handle and the venue's website (reels from Sep 27)", () => {
+  const client = new PlacesClient("test-key");
+  const carrollton = { address: "Carrollton, GA", lat: 33.5801, lng: -85.0766 };
+  const mexican = { primaryType: "mexican_restaurant", types: ["mexican_restaurant", "restaurant", "food"] };
+  const ct = (id: string, name: string, lat: number, lng: number, site: string) => raw(id, name, lat, lng, { ...mexican, websiteUri: site });
+  const dunwoody = ct("ct_dun", "CT Cantina & Taqueria", 33.926, -84.341, "https://www.cttacos.com/");
+  const alpharetta = ct("ct_alp", "CT Cantina & Taqueria", 34.07, -84.29, "https://www.cttacos.com/alpharetta");
+  const fayetteville = ct("ct_fay", "CT Cantina & Taqueria", 33.43, -84.58, "https://www.cttacos.com/");
+  const reforma = ct("ct_ref", "CT Reforma Taqueria - Buckhead", 33.85, -84.36, "https://reforma.cttacos.com/");
+  const alPastor = ct("ct_alpa", "CT Al Pastor Taqueria", 34.13, -84.2, "https://alpastor.cttacos.com/");
+
+  it("finds @cttacos as CT Cantina & Taqueria through its website, and not its sister restaurants", async () => {
+    mockGoogle({
+      "CT Tacos": [dunwoody, alpharetta, fayetteville, reforma, alPastor],
+      "CT Tacos Dunwoody": [dunwoody],
+    });
+    const c = place({ name: "CT Tacos", search_query: "CT Tacos", city: "Dunwoody", food_only: true });
+    attachHandles([c], { ...emptyMeta("x"), mentions: ["cttacos"] });
+    expect(c.instagram_handle).toBe("cttacos");
+    const res = await resolveBranch(client, c, carrollton);
+    expect(res?.branches.map((b) => b.id).sort()).toEqual(["ct_alp", "ct_dun", "ct_fay"]);
+    expect(res?.best.id).toBe("ct_fay");
+    expect(res?.filmed?.id).toBe("ct_dun");
+  });
+
+  it("prefers @laylocafe's Laylo Cafe over Lalo's Cafe when the transcript misheard the name", async () => {
+    const bakery = { primaryType: "bakery", types: ["bakery", "cafe", "food"] };
+    const laylo = raw("laylo", "Laylo Cafe", 33.886, -84.3, { ...bakery, websiteUri: "https://laylocafe.com/" });
+    const lalos = raw("lalos", "Lalo's Cafe", 33.92, -84.35, { primaryType: "cafe", types: ["cafe", "food"] });
+    mockGoogle({ "Lalo Cafe": [lalos], "Lalo Cafe Chamblee": [laylo, lalos] });
+    const c = place({ name: "Lalo Cafe", search_query: "Lalo Cafe", city: "Chamblee", food_only: true });
+    attachHandles([c], { ...emptyMeta("x"), mentions: ["laylocafe"] });
+    expect(c.alt_names).toEqual(["laylocafe"]);
+    const res = await resolveBranch(client, c, carrollton);
+    expect(res?.best.id).toBe("laylo");
+    expect(res?.branches.map((b) => b.id)).toEqual(["laylo"]);
+  });
+
+  it("links a name to a handle only when they're close", () => {
+    expect(closestHandle("Lalo Cafe", ["atlpeachyeats", "laylocafe"])).toBe("laylocafe");
+    expect(closestHandle("Khan's Kitchen", ["khans_kitchen_atlanta"])).toBe("khans_kitchen_atlanta");
+    expect(closestHandle("Rosetta Bakery", ["highstreetatl", "atlfoodiesofficial"])).toBe("");
+    expect(closestHandle("CT", ["ct"])).toBe("");
   });
 });

@@ -61,6 +61,37 @@ export function namesMatch(placeName: string, wanted: string): boolean {
   return hits / wantedTokens.length >= 0.66 && hits / placeTokens.length >= 0.34;
 }
 
+/** Letters and digits only: "Khan's Kitchen" -> "khanskitchen", "@khans_kitchen" -> "khanskitchen". */
+export function compact(s: string): string {
+  return normalize(s).replace(/ /g, "");
+}
+
+/** Levenshtein distance, for names that differ by a letter or two ("lalocafe" vs "laylocafe"). */
+export function editDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+/**
+ * The first part of a business's own website: "cttacos" for https://www.cttacos.com/alpharetta,
+ * "reforma" for reforma.cttacos.com. Empty for shared hosts like toasttab.com or instagram.com.
+ */
+export function siteName(url: string | null | undefined): string {
+  return websiteHost(url).split(".")[0] ?? "";
+}
+
+/** The business's website is named after this Instagram handle (cttacos.com for @cttacos). */
+export function siteMatchesHandle(url: string | null | undefined, handle: string): boolean {
+  const site = siteName(url);
+  return site.length >= 4 && site === compact(handle);
+}
+
 export function matchesAny(placeName: string, names: string[]): boolean {
   return names.some((n) => n && namesMatch(placeName, n));
 }

@@ -11,7 +11,8 @@ export const DEFAULT_AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 export const SYSTEM = `You read social media posts about food and list the restaurants, cafes, bars, bakeries or food trucks they feature.
 Rules:
 - Only list venues the post recommends. Never guess or invent one.
-- An @handle is often the venue's own account. Turn it into the business name if you can.
+- An @handle is often the venue's own account. Turn it into the business name if you can, and put the handle in instagram_handle.
+- Spell names the way the caption or @handle does. The spoken part is automatic speech-to-text and often misspells names.
 - Food creators, influencers and friends are not venues. Nor is a market, mall, food hall or other business the venue is inside or next to, or an account credited as the organizer, unless the post recommends eating or drinking there too.
 - A list post ("top 5 tacos") has one entry per venue.
 - city is the city or neighborhood of the venue if the post says it, otherwise empty.

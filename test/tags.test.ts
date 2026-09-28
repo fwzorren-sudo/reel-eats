@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { cleanTags, isEventNote, priceTags, ruleGoSoon, ruleTags, supportedTags } from "../src/tags";
+import { cleanTags, isEventNote, oneLocationOnly, priceTags, ruleGoSoon, ruleTags, supportedTags } from "../src/tags";
 
 const fixture = (name: string) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"))[0];
 
@@ -70,5 +70,17 @@ describe("pop-ups and events", () => {
   it("are tied to one branch; a new opening isn't", () => {
     for (const n of ["Pop-up", "Pop-up through Oct 12", "Seasonal", "Limited time through 11/30", "Halloween takeover"]) expect(isEventNote(n)).toBe(true);
     for (const n of ["New opening", "Now open starting September 18", "", null]) expect(isEventNote(n)).toBe(false);
+  });
+});
+
+describe("offers at one location", () => {
+  it("are spotted", () => {
+    expect(oneLocationOnly("with tons of indoor and patio seating. This is only at their new Dunwoody location!")).toBe(true);
+    expect(oneLocationOnly("Exclusive to the Midtown location")).toBe(true);
+    expect(oneLocationOnly("Available at this location only")).toBe(true);
+  });
+  it("aren't read into ordinary captions", () => {
+    expect(oneLocationOnly("They have locations all over Atlanta")).toBe(false);
+    expect(oneLocationOnly("The only thing better than the tacos is the location")).toBe(false);
   });
 });

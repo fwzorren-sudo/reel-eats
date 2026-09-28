@@ -1,4 +1,4 @@
-import { distanceMeters, matchesAny, websiteHost } from "./geo";
+import { compact, distanceMeters, matchesAny, siteMatchesHandle, websiteHost } from "./geo";
 import { currentTrace, errorText } from "./trace";
 import type { Category, Env, ExtractedPlace, GeoPoint, Home, OpeningHours, PlaceCandidate, SearchArea } from "./types";
 
@@ -280,16 +280,29 @@ export async function resolveBranch(client: PlacesClient, place: ExtractedPlace,
     !home && !where && !filmed ? client.textSearch(query, { pageSize: 10 }) : Promise.resolve([]),
   ]);
 
-  const open = (c: PlaceCandidate) => c.businessStatus !== "CLOSED_PERMANENTLY" && matchesAny(c.name, names);
+  // An Instagram handle is the venue's own spelling. A result whose website or name matches it
+  // is the venue, even when Google's name differs ("CT Cantina & Taqueria" for @cttacos).
+  const handles = [place.instagram_handle, ...place.alt_names].filter((h) => h && !/\s/.test(h));
+  const byHandle = (c: PlaceCandidate) => handles.some((h) => siteMatchesHandle(c.website, h) || compact(c.name) === compact(h));
+  const open = (c: PlaceCandidate) => c.businessStatus !== "CLOSED_PERMANENTLY" && (matchesAny(c.name, names) || byHandle(c));
   // Prefer food and drink businesses. With food_only, nothing else is accepted.
   const foodFirst = (list: PlaceCandidate[]) => {
     const matched = list.filter(open);
     const food = matched.filter(isFoodPlace);
     return food.length || place.food_only ? food : matched;
   };
-  const nearMatches = foodFirst(near);
-  const hintMatches = foodFirst(hinted);
-  const plainMatches = foodFirst(plain);
+
+  // When any result matches the handle, drop look-alikes that only share a similar name
+  // ("Lalo's Cafe" when the reel tags @laylocafe), keeping other branches of the same business.
+  const strong = [...near, ...hinted, ...plain].filter((c) => open(c) && byHandle(c));
+  const strongHosts = new Set(strong.map((c) => websiteHost(c.website)).filter(Boolean));
+  const pick = (list: PlaceCandidate[]) => {
+    const matched = foodFirst(list);
+    return strong.length ? matched.filter((c) => byHandle(c) || strongHosts.has(websiteHost(c.website))) : matched;
+  };
+  const nearMatches = pick(near);
+  const hintMatches = pick(hinted);
+  const plainMatches = pick(plain);
 
   let pool: PlaceCandidate[];
   if (hintMatches.length) {

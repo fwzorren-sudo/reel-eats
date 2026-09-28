@@ -17,11 +17,11 @@ import {
 } from "./db";
 import { ExtractionError, extractPlaces } from "./extract";
 import { namesMatch } from "./geo";
-import { candidate, captionSummary, dedupe, noteCandidate, ruleCandidates, VENUE_RADIUS_M } from "./identify";
+import { attachHandles, candidate, captionSummary, dedupe, noteCandidate, ruleCandidates, VENUE_RADIUS_M } from "./identify";
 import { saveImageFromUrl } from "./media";
 import { branchSummary, categoryFor, cuisineFor, PlacesError, placesClient, resolveBranch } from "./places";
 import { emptyMeta, fetchSourceMeta, mapApifyItem } from "./source";
-import { cleanTags, isEventNote, priceTags, ruleGoSoon, ruleTags } from "./tags";
+import { cleanTags, isEventNote, oneLocationOnly, priceTags, ruleGoSoon, ruleTags } from "./tags";
 import { currentTrace, errorText, mergeAttempt, runTraced, Trace, type Attempt } from "./trace";
 import type { ApifyUsage, Engine, Env, ExtractedPlace, Home, PlaceCandidate, PlaceRow, ShareRow, SourceMeta, SourceRow } from "./types";
 import { extractWithWorkersAI } from "./workersai";
@@ -161,6 +161,7 @@ async function plan(env: Env, share: ShareRow, meta: SourceMeta | null): Promise
     });
     const primary = extraction.places.map((p) => ({ ...p, food_only: false, keep_unresolved: true, category_from_google: p.category === "Other" }));
     applyArea(primary, meta, rules.area);
+    attachHandles(primary, meta);
     currentTrace()?.note("names to look up", `Claude: ${primary.map((c) => c.name).join(", ") || `none (${extraction.reason})`}`);
     return { primary, fallback: [], reason: extraction.reason, fromClaude: true };
   }
@@ -175,6 +176,7 @@ async function plan(env: Env, share: ShareRow, meta: SourceMeta | null): Promise
   const ai = engine === "workers-ai" ? await extractWithWorkersAI(env, meta, share.shared_text) : [];
   for (const c of ai) if (!c.city && rules.cityHint) c.city = rules.cityHint;
   applyArea(ai, meta, rules.area);
+  attachHandles(ai, meta);
   const primary = dedupe([...ai, ...rules.primary]);
   // Shows up in Cloudflare's Worker logs; handy when a reel lands on the wrong place.
   console.log(
@@ -190,7 +192,7 @@ async function plan(env: Env, share: ShareRow, meta: SourceMeta | null): Promise
   );
   currentTrace()?.note(
     "names to look up",
-    [`AI: ${ai.map((c) => c.name).join(", ") || "none"}`, `rules: ${rules.primary.map((c) => c.name).join(", ") || "none"}`, `backup: ${rules.fallback.map((c) => c.name).join(", ") || "none"}`].join("; "),
+    [`AI: ${ai.map((c) => `${c.name}${c.instagram_handle ? ` (@${c.instagram_handle})` : ""}`).join(", ") || "none"}`, `rules: ${rules.primary.map((c) => c.name).join(", ") || "none"}`, `backup: ${rules.fallback.map((c) => c.name).join(", ") || "none"}`].join("; "),
   );
 
   let reason = "";
@@ -397,11 +399,13 @@ async function processTraced(env: Env, shareId: string, opts: ProcessOptions, tr
       const handle = p.instagram_handle || handleFor(best?.name ?? p.name, meta) || null;
 
       // A pop-up or event happens at the branch in the reel, not at whichever one is nearest home.
+      // So does something the post says is only at one location.
       let keepBranch = 0;
-      if (best && filmed && isEventNote(goSoon)) {
+      const why = isEventNote(goSoon) ? `"${goSoon}" is` : single && oneLocationOnly(postText) ? "The post says it's only" : "";
+      if (best && filmed && why) {
         keepBranch = 1;
         if (filmed.id !== best.id) {
-          trace.note("branch", `"${goSoon}" is at the branch in the reel, ${filmed.address}, so that's kept instead of the one nearest home`);
+          trace.note("branch", `${why} at the branch in the reel, ${filmed.address}, so that's kept instead of the one nearest home`);
           best = filmed;
           fields = branchFields(filmed, branches);
         }

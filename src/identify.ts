@@ -1,3 +1,4 @@
+import { compact, editDistance } from "./geo";
 import type { ExtractedPlace, SearchArea, SourceMeta } from "./types";
 
 /** How far around a tagged venue, and around a tagged city, to look on Google Maps. */
@@ -176,6 +177,36 @@ export function ruleCandidates(meta: SourceMeta | null, sharedText: string | nul
     c.near ??= area;
   }
   return { primary: dedupe(primary), fallback: dedupe(fallback).slice(0, 5), cityHint, area };
+}
+
+/**
+ * The @handle in the post that a name refers to, allowing for a speech-to-text misspelling:
+ * "Lalo Cafe" from the transcript is @laylocafe in the caption. Needs 5+ letters to count.
+ */
+export function closestHandle(name: string, handles: string[]): string {
+  const n = compact(name);
+  if (n.length < 5) return "";
+  let best = "";
+  let bestScore = Infinity;
+  for (const h of handles) {
+    const c = compact(h);
+    if (c.length < 5) continue;
+    const score = c === n ? 0 : c.includes(n) || n.includes(c) ? 1 : editDistance(c, n) <= 2 ? 2 + editDistance(c, n) : Infinity;
+    if (score < bestScore) [best, bestScore] = [h, score];
+  }
+  return best;
+}
+
+/** Give each AI or Claude name the post's matching @handle, so Google results can be checked against it. */
+export function attachHandles(list: ExtractedPlace[], meta: SourceMeta | null): void {
+  if (!meta) return;
+  const handles = [...meta.tagged.map((t) => t.username), ...meta.mentions];
+  for (const c of list) {
+    const h = c.instagram_handle || closestHandle(c.name, handles);
+    if (!h) continue;
+    c.instagram_handle = h;
+    if (!c.alt_names.some((a) => compact(a) === compact(h))) c.alt_names = [...c.alt_names, h];
+  }
 }
 
 export function dedupe(list: ExtractedPlace[]): ExtractedPlace[] {
