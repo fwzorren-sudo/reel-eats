@@ -341,6 +341,13 @@ export function brandQuery(name: string): string {
   return words.length >= 3 ? words.slice(0, 2).join(" ") : "";
 }
 
+/**
+ * When the post names a city but the search there finds nothing by that name, a same-named
+ * place from the search near home has to be about this close to that city. Wide enough for
+ * a metro area and its suburbs.
+ */
+export const HINT_AREA_M = 60_000;
+
 export interface Resolution {
   best: PlaceCandidate;
   /** Every matching branch, nearest to home first (includes `best`). */
@@ -401,6 +408,20 @@ export async function resolveBranch(client: PlacesClient, place: ExtractedPlace,
     const hosts = new Set(hintMatches.map((h) => websiteHost(h.website)).filter(Boolean));
     const sameBrand = nearMatches.filter((n) => place.multi_location || hosts.has(websiteHost(n.website)));
     pool = [...hintMatches, ...sameBrand];
+  } else if (where || filmed) {
+    // Nothing by that name where the post says. A same-named place near home only counts when
+    // it's in that area too, so "The 44 Club" in Boise isn't taken for the Atlanta speakeasy.
+    // Whatever the city search did find (a neighbor, the building's other venue) shows where the
+    // city is. When it found nothing at all, there's no telling, so the near-home match stands.
+    const anchors: GeoPoint[] = [...hinted, ...(filmed ? [filmed] : [])];
+    const town = where.split(",")[0].trim().toLowerCase();
+    const inArea = (c: PlaceCandidate) =>
+      !anchors.length ||
+      anchors.some((a) => distanceMeters(a.lat, a.lng, c.lat, c.lng) <= HINT_AREA_M) ||
+      (town.length > 2 && c.address.toLowerCase().includes(town));
+    const far = nearMatches.filter((c) => !inArea(c));
+    if (far.length) currentTrace()?.note("far away", `${far.map((c) => `${c.name}, ${c.address}`).join("; ")}: not near ${where || "the location tag"}`);
+    pool = [...nearMatches.filter(inArea), ...plainMatches];
   } else {
     pool = [...nearMatches, ...plainMatches];
   }

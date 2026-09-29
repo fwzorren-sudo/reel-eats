@@ -112,6 +112,31 @@ describe("resolveBranch", () => {
     expect(res?.best.id).toBe("hoboken");
   });
 
+  it("doesn't take a same-named place far away when the post names another city", async () => {
+    // The 44 Club is a speakeasy under SM44 in Atlanta, with no Google listing of its own.
+    // The search near home turned up a 44 Club in Boise.
+    const HOME_ATL: Home = { address: "Atlanta, GA", lat: 33.749, lng: -84.388 };
+    mockGoogle({
+      "The 44 Club": [raw("boise", "44 Club", 43.6461, -116.2435, { formattedAddress: "4340 W State St, Boise, ID 83703, USA", types: ["bar"] })],
+      "The 44 Club Atlanta": [
+        raw("sm44", "SM44 Atl", 33.7766, -84.3838, { formattedAddress: "793 Juniper St NE, Atlanta, GA 30308, USA", types: ["bar"] }),
+        raw("bar44", "Bar 44", 34.0339, -84.5236, { formattedAddress: "2755 Canton Rd, Marietta, GA 30066, USA", types: ["bar"] }),
+      ],
+    });
+    expect(await resolveBranch(client, place({ name: "The 44 Club", city: "Atlanta" }), HOME_ATL)).toBeNull();
+
+    // A place in that area still counts when the city search spelled it differently.
+    mockGoogle({
+      "Lalo's": [raw("lalos", "Lalo's Cantina", 33.775, -84.36, { formattedAddress: "1 Ponce de Leon Ave, Atlanta, GA 30308, USA" })],
+      "Lalo's Atlanta": [raw("near", "Some Other Bar", 33.78, -84.38)],
+    });
+    expect((await resolveBranch(client, place({ name: "Lalo's", city: "Atlanta" }), HOME_ATL))?.best.id).toBe("lalos");
+
+    // With no city in the post, the nearest match anywhere is still fine: a reel about Katz's is about New York.
+    mockGoogle({ "Katz's Delicatessen": [raw("katz", "Katz's Delicatessen", 40.7223, -73.9874)] });
+    expect((await resolveBranch(client, place({ name: "Katz's Delicatessen" }), HOME_ATL))?.best.id).toBe("katz");
+  });
+
   it("returns null when nothing matches the name", async () => {
     mockGoogle({ "Tiny Taqueria": [raw("x", "Big Burger Barn", 40.72, -74.04)] });
     expect(await resolveBranch(client, place({ name: "Tiny Taqueria" }), HOME_JC)).toBeNull();
