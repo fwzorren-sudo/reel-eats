@@ -83,12 +83,11 @@ const state = {
   viewer: { role: "owner", name: null },
   apify: null,
   view: "map",
-  browse: "cats",
   status: "want",
   category: "",
   city: "",
   openNow: false,
-  /** Occasions, "go soon" and "under $20", from the list's icons, Browse or a tag. Every one has to match. */
+  /** Occasions, "go soon" and "under $20", from the list's icons, More or a tag. Every one has to match. */
   filters: [],
   search: "",
   sort: "home",
@@ -100,6 +99,11 @@ const state = {
   guest: null,
   /** The list shows archived places instead. */
   archivedView: false,
+  /** The pick on the Pick tab: { token, data } from the server, or { token, ended } once it's over. */
+  pick: null,
+  /** Picks still going, for the Pick tab's setup screen. */
+  picks: null,
+  pickMode: "relay",
 };
 
 /* ---------- small helpers ---------- */
@@ -278,6 +282,7 @@ function applyData(data) {
 }
 
 async function refresh({ rerenderSheet = false } = {}) {
+  if (state.guest?.pick) return refreshPick();
   if (state.guest) return loadGuest({ rerenderSheet });
   const data = await api("/api/state");
   applyData(data);
@@ -331,15 +336,15 @@ function recoverStale() {
   }
 }
 
-function visiblePlaces({ ignoreCategory = false, ignoreBrowse = false } = {}) {
+function visiblePlaces({ ignoreCategory = false, ignoreCity = false, filters = state.filters } = {}) {
   return state.places.filter(
     (p) =>
       !isArchived(p) &&
       (state.status === "all" || p.visit_status === state.status) &&
       (ignoreCategory || !state.category || p.category === state.category) &&
       (!state.openNow || openNow(p)) &&
-      (ignoreBrowse || !state.city || cityOf(p) === state.city) &&
-      (ignoreBrowse || matchesFilters(p)),
+      (ignoreCity || !state.city || cityOf(p) === state.city) &&
+      matchesFilters(p, filters),
   );
 }
 
@@ -366,7 +371,7 @@ function clearAllFilters() {
   fitted = false;
 }
 
-/** A Browse tile or a tag shows just what was picked, instead of adding to what was on before. */
+/** A tag on a place shows just that tag, instead of adding to what was on before. */
 function startFresh() {
   const openNow = state.openNow;
   clearAllFilters();
@@ -375,18 +380,19 @@ function startFresh() {
 
 function savePrefs() {
   if (state.guest) return;
-  store.set(PREFS_KEY, JSON.stringify({ view: state.view, status: state.status, sort: state.sort, browse: state.browse }));
+  store.set(PREFS_KEY, JSON.stringify({ view: state.view, status: state.status, sort: state.sort }));
 }
 
 /* ---------- rendering ---------- */
 function render() {
   renderTally();
   renderCategoryFilter();
+  renderCityFilter();
   renderBanner();
   $("#open-filter").setAttribute("aria-pressed", String(state.openNow));
   if (state.view === "map") renderMap();
   if (state.view === "list") renderList();
-  if (state.view === "cats") renderBrowse();
+  if (state.view === "pick") renderPick();
 }
 
 function renderTally() {
@@ -408,6 +414,22 @@ function renderCategoryFilter() {
   sel.value = state.category;
 }
 
+/** Only worth showing when the places are in more than one city. */
+function renderCityFilter() {
+  const sel = $("#city-filter");
+  const counts = {};
+  for (const p of visiblePlaces({ ignoreCity: true })) {
+    const c = cityOf(p);
+    if (c) counts[c] = (counts[c] || 0) + 1;
+  }
+  const cities = Object.keys(counts).sort((a, b) => counts[b] - counts[a] || a.localeCompare(b));
+  if (state.city && !counts[state.city]) cities.unshift(state.city);
+  const everywhere = new Set(state.places.filter((p) => !isArchived(p)).map(cityOf).filter(Boolean));
+  sel.hidden = everywhere.size < 2 && !state.city;
+  sel.innerHTML = `<option value="">City</option>` + cities.map((c) => `<option value="${esc(c)}">${esc(c)} (${counts[c] || 0})</option>`).join("");
+  sel.value = state.city;
+}
+
 /** Apify credit: warn when most of the month's credit is used, or it ran out. */
 function renderBanner() {
   const el = $("#banner");
@@ -427,18 +449,26 @@ function renderBanner() {
 }
 
 function setView(view) {
-  if (view === "settings" && state.guest) view = "map";
+  if ((view === "settings" || view === "pick") && state.guest && !state.guest.pick) view = "map";
   if (view !== "list") state.archivedView = false;
   state.view = view;
   savePrefs();
-  for (const v of ["map", "list", "cats", "settings"]) $(`#view-${v}`).hidden = v !== view;
+  for (const v of ["map", "list", "pick", "settings"]) $(`#view-${v}`).hidden = v !== view;
   document.querySelectorAll(".tabbar button").forEach((b) => {
     if (b.dataset.view === view) b.setAttribute("aria-current", "page");
     else b.removeAttribute("aria-current");
   });
-  $("#add-btn").hidden = view === "settings" || !!state.guest;
+  $("#add-btn").hidden = view === "settings" || view === "pick" || !!state.guest;
+  document.body.classList.toggle("picking", view === "pick" && !!state.pick);
   if (view === "settings") renderSettings();
+  if (view === "pick" && !state.guest) {
+    const saved = store.get(PICK_KEY);
+    if (!state.pick && saved) openPick(saved, { quiet: saved !== pickLinkOpened });
+    if (!state.pick) loadPickList();
+  }
   render();
+  if (view === "pick" && state.pick?.data) refreshPick();
+  else clearTimeout(pickPoll);
   if (view === "map" && map) setTimeout(() => map.invalidateSize(), 0);
 }
 
@@ -576,10 +606,44 @@ const LIST_FILTERS = {
 };
 
 /** A filter icon is a tag unless it says otherwise. */
-const matchesFilters = (p) => state.filters.every((f) => (LIST_FILTERS[f]?.test ? LIST_FILTERS[f].test(p) : (p.tags || []).includes(f)));
+const matchesFilters = (p, filters = state.filters) => filters.every((f) => (LIST_FILTERS[f]?.test ? LIST_FILTERS[f].test(p) : (p.tags || []).includes(f)));
+
+const ICON_FILTERS = () => [...document.querySelectorAll("#icon-filters [data-filter]")].map((b) => b.dataset.filter);
 
 function renderIconFilters() {
   for (const b of document.querySelectorAll("[data-filter]")) b.setAttribute("aria-pressed", String(state.filters.includes(b.dataset.filter)));
+  const icons = new Set(ICON_FILTERS());
+  const extra = state.filters.filter((f) => !icons.has(f)).length;
+  for (const b of document.querySelectorAll("[data-more-filters]")) {
+    b.setAttribute("aria-pressed", String(extra > 0));
+    b.querySelector(".count").textContent = extra ? ` · ${extra}` : "";
+  }
+}
+
+/** The occasions without an icon of their own. Each tap adds or removes one, and the sheet stays open. */
+function openMoreFilters() {
+  const icons = new Set(ICON_FILTERS());
+  const options = TAGS.filter((t) => !icons.has(t))
+    .map((t) => ({ f: t, icon: TAG_EMOJI[t], name: t[0].toUpperCase() + t.slice(1) }))
+    .map((o) => ({ ...o, on: state.filters.includes(o.f), n: visiblePlaces({ filters: [...new Set([...state.filters, o.f])] }).length }))
+    .filter((o) => o.on || o.n);
+  const shown = visiblePlaces().length;
+  openSheet(
+    `${sheetHead("More filters", "A place has to match every one you pick, and the icons on the list.")}
+    <div class="sheet-body">
+      <div class="more-filters">${options
+        .map(
+          (o) =>
+            `<button type="button" class="chip" data-filter="${esc(o.f)}" aria-pressed="${o.on}"><span aria-hidden="true">${o.icon}</span> ${esc(o.name)} <span class="hint num">${o.n}</span></button>`,
+        )
+        .join("")}</div>
+      ${options.length ? "" : `<p class="hint">Nothing here has another occasion tag. Add tags under Edit details on any place.</p>`}
+      <div class="btn-row"><button class="btn primary" type="button" data-act="close">Show ${shown} ${shown === 1 ? "place" : "places"}</button>${
+        filterLabels().length ? `<button class="btn" type="button" data-clear-all>Clear all</button>` : ""
+      }</div>
+    </div>`,
+    { type: "more" },
+  );
 }
 
 function distanceFor(p) {
@@ -661,7 +725,7 @@ function inboxCard(s) {
 function activeFilters() {
   const chips = [];
   if (state.city) chips.push(`<button type="button" class="chip on" data-clear="city">📍 ${esc(state.city)} <span aria-hidden="true">✕</span></button>`);
-  // Occasions picked in Browse that have no icon of their own on the list.
+  // Occasions picked under More, or from a place's tags, that have no icon of their own.
   for (const f of state.filters.filter((x) => !LIST_FILTERS[x])) {
     chips.push(`<button type="button" class="chip on" data-filter="${esc(f)}">${TAG_EMOJI[f] || ""} ${esc(f)} <span aria-hidden="true">✕</span></button>`);
   }
@@ -729,56 +793,586 @@ function emptyState() {
   </div>`;
 }
 
-/* ---------- browse: categories, cities, occasions ---------- */
-function tile({ attr, value, icon, name, list }) {
-  const names = sortPlaces([...list]).map((p) => p.name);
-  return `<button type="button" class="cat-tile" ${attr}="${esc(value)}">
-    <span class="emoji" aria-hidden="true">${icon}</span>
-    <span class="name">${esc(name)}</span>
-    <span class="count">${list.length} ${list.length === 1 ? "place" : "places"}</span>
-    <span class="names">${esc(names.slice(0, 3).join(", "))}</span>
-  </button>`;
+/* ---------- Pick: swipe a short list with whoever's going out ---------- */
+const VOTER_KEY = "reel-eats-voter";
+const PICK_NAME_KEY = "reel-eats-pick-name";
+const PICK_KEY = "reel-eats-pick";
+/** Same limit as the server's. */
+const MAX_PICK = 40;
+const PICK_MODES = {
+  relay: {
+    name: "Pass it along",
+    help: "You swipe first, then send the link on. Each person sees only what's left, and a place anyone drops is gone.",
+  },
+  vote: {
+    name: "Everyone votes",
+    help: "Everyone swipes the whole set. Then the places are ranked by how many people kept them.",
+  },
+};
+
+let memVoter = "";
+/** Made on this phone and kept there, so the same person keeps their swipes. */
+function voterId() {
+  const saved = store.get(VOTER_KEY);
+  if (saved && /^[\w-]{8,64}$/.test(saved)) return saved;
+  memVoter ||= crypto.randomUUID ? crypto.randomUUID() : `v-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  store.set(VOTER_KEY, memVoter);
+  return memVoter;
 }
 
-function renderBrowse() {
-  document.querySelectorAll("[data-browse]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.browse === state.browse)));
-  // A tile shows just its group (see startFresh), so the counts ignore the other filters too.
-  const places = visiblePlaces({ ignoreCategory: true, ignoreBrowse: true });
-  const label = SCOPE_LABEL[state.status];
-  let tiles = [];
-  let heading = "";
-  if (state.browse === "cats") {
-    const groups = {};
-    for (const p of places) (groups[p.category] ||= []).push(p);
-    heading = `${label} by category`;
-    tiles = CATEGORIES.filter((c) => groups[c])
-      .sort((a, b) => groups[b].length - groups[a].length)
-      .map((c) => tile({ attr: "data-cat", value: c, icon: emoji(c), name: c, list: groups[c] }));
-  } else if (state.browse === "cities") {
-    const groups = {};
-    for (const p of places) (groups[cityOf(p) || "Somewhere"] ||= []).push(p);
-    heading = `${label} by city`;
-    tiles = Object.keys(groups)
-      .sort((a, b) => groups[b].length - groups[a].length || a.localeCompare(b))
-      .map((c) => tile({ attr: "data-city", value: c === "Somewhere" ? "" : c, icon: "📍", name: c === "Somewhere" ? "No city yet" : c, list: groups[c] }));
-  } else {
-    heading = `${label} by occasion`;
-    const soon = places.filter(goSoonActive);
-    if (soon.length && state.status !== "visited") tiles.push(tile({ attr: "data-go-soon", value: "1", icon: "⏳", name: "Go soon", list: soon }));
-    for (const t of TAGS) {
-      const list = places.filter((p) => p.tags.includes(t));
-      if (list.length) tiles.push(tile({ attr: "data-tag", value: t, icon: TAG_EMOJI[t], name: t[0].toUpperCase() + t.slice(1), list }));
+class PickError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/** A pick's link works without the access code, so these calls don't send it. */
+async function pickApi(token, action, body) {
+  const path = `/api/pick/${enc(token)}${action ? `/${action}` : `?voter=${enc(voterId())}`}`;
+  const init = body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voter_id: voterId(), ...body }) } : {};
+  const res = await fetch(path, init).catch(() => null);
+  if (!res) throw new PickError("Can't reach the server. Check your connection and try again.", 0);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new PickError(data.error || `Something went wrong (${res.status}).`, res.status);
+  return data;
+}
+
+/** Places for the setup screen: what the filters show, nearest first, minus closed ones. */
+function pickPool() {
+  return sortPlaces(visiblePlaces().filter((p) => !closedForGood(p)));
+}
+
+const pickSwiped = []; // this session's swipes, newest last, for Undo
+let pickQueue = Promise.resolve();
+let pickInFlight = 0;
+let pickPoll;
+/** A pick's link this phone was opened with. If that pick has ended, say so. */
+let pickLinkOpened = null;
+
+function pickSignature(d) {
+  return JSON.stringify([d.left, d.todo, d.ranking, d.people, d.agreed, d.mine, d.joined]);
+}
+
+function applyPick(data) {
+  const d = { ...data, places: (data.places || []).map(parsePlace) };
+  const before = state.pick?.data ? pickSignature(state.pick.data) : "";
+  const same = state.pick?.token === d.token;
+  state.pick = { ...(same ? state.pick : {}), token: d.token, data: d, ended: null };
+  if (!same) pickSwiped.length = 0;
+  if (state.guest?.pick) state.places = d.places;
+  else store.set(PICK_KEY, d.token);
+  return pickSignature(d) !== before;
+}
+
+/** status: 410 when the pick is over, 404 when the link never worked. */
+function pickEnded(token, status) {
+  state.pick = { token, data: null, ended: status === 404 ? 404 : 410 };
+  if (!state.guest?.pick) store.set(PICK_KEY, null);
+}
+
+/** quiet: picking up where this phone left off, so a pick that has since ended just goes away. */
+async function openPick(token, { quiet = false } = {}) {
+  try {
+    applyPick(await pickApi(token));
+  } catch (e) {
+    if (quiet && !state.guest) {
+      store.set(PICK_KEY, null);
+      if (state.pick?.token === token) state.pick = null;
+    } else if (e.status === 404 || e.status === 410) pickEnded(token, e.status);
+    else toast(e.message);
+  }
+  if (state.view === "pick") renderPick();
+  schedulePickPoll();
+}
+
+/** Others swipe too, so the pick on screen is re-read every few seconds. */
+function schedulePickPoll() {
+  clearTimeout(pickPoll);
+  if (state.view !== "pick" || !state.pick?.data || document.visibilityState !== "visible") return;
+  pickPoll = setTimeout(refreshPick, 5000);
+}
+
+async function refreshPick() {
+  const token = state.pick?.token;
+  if (!token || !state.pick.data) return;
+  if (!pickInFlight) {
+    try {
+      const data = await pickApi(token);
+      const busy = $("#swipe-stack .dragging") || document.activeElement?.closest?.("#pick input");
+      if (state.pick?.token === token && !pickInFlight && applyPick(data) && !busy) renderPick();
+    } catch (e) {
+      if (e.status === 404 || e.status === 410) {
+        pickEnded(token, e.status);
+        renderPick();
+      }
     }
   }
-  const empty =
-    state.browse === "tags"
-      ? `<div class="empty"><h2>No occasions yet</h2><p>Places get tags like "date night" or "outdoor seating" when a reel mentions them. You can add tags yourself under Edit details on any place.</p></div>`
-      : `<div class="empty"><h2>Nothing here</h2><p>No places match this filter.</p></div>`;
-  $("#cats").innerHTML = tiles.length
-    ? `<div class="section-label">${esc(heading)}</div><div class="cat-grid">${tiles.join("")}</div>`
-    : state.places.length
-      ? empty
-      : emptyState();
+  schedulePickPoll();
+}
+
+async function loadPickList() {
+  if (state.guest) return;
+  try {
+    state.picks = (await api("/api/picks")).picks;
+  } catch {
+    state.picks = [];
+  }
+  if (state.view === "pick" && !state.pick) renderPick();
+}
+
+function timeLeft(expires) {
+  const mins = Math.max(0, Math.round((expires - Date.now()) / 60000));
+  return mins >= 90 ? `ends in ${Math.round(mins / 60)} h` : `ends in ${mins} min`;
+}
+
+function pickThumbs(places, max = 7) {
+  const shown = places.slice(0, max);
+  const more = places.length - shown.length;
+  return `<div class="pick-thumbs" aria-hidden="true">${shown.map((p) => thumb(p, "small")).join("")}${more > 0 ? `<span class="more num">+${more}</span>` : ""}</div>`;
+}
+
+function renderPick() {
+  const el = $("#pick");
+  if (!el) return;
+  document.body.classList.toggle("picking", state.view === "pick" && !!state.pick);
+  const pick = state.pick;
+  if (!pick) return renderPickSetup(el);
+  if (pick.ended) {
+    const gone = pick.ended === 404;
+    const next = state.guest ? "Ask whoever sent it to start a new one." : "Start a new one from your filters.";
+    el.innerHTML = `<div class="empty"><h2>${gone ? "This link doesn't work" : "This pick has ended"}</h2>
+      <p>${gone ? `It may be missing a letter, or the pick was cleared away. ${next}` : `Picks last a day. ${next}`}</p>${
+        state.guest ? "" : `<button class="btn primary" type="button" data-pick="new">Start a new pick</button>`
+      }</div>`;
+    return;
+  }
+  const d = pick.data;
+  if (!d) {
+    el.innerHTML = `<div class="empty"><div class="spinner" aria-hidden="true"></div></div>`;
+    return;
+  }
+  if (!d.joined) return renderPickJoin(el, d);
+  if (d.todo.length && !pick.showResults) return renderSwipe(el, d);
+  renderPickResults(el, d);
+}
+
+function renderPickSetup(el) {
+  const pool = pickPool();
+  const used = pool.slice(0, MAX_PICK);
+  const on = filterLabels();
+  // Keep what's typed when a filter redraws the screen.
+  const name = $("#pick-name")?.value ?? (store.get(PICK_NAME_KEY) || state.viewer.name || "");
+  const mode = state.pickMode;
+  const going = (state.picks || [])
+    .map(
+      (x) => `<button type="button" class="pick-row" data-pick="open" data-token="${esc(x.token)}">
+        <span class="main"><span class="title">${esc(x.label || "Where should we go?")}</span>
+        <span class="sub">${esc(PICK_MODES[x.mode]?.name || "")} · ${x.places} places · ${esc(x.people.join(", ") || "nobody yet")}</span></span>
+        <span class="hint">${esc(timeLeft(x.expires_at))}</span>
+      </button>`,
+    )
+    .join("");
+  el.innerHTML = `<div class="pick-setup">
+    <div class="pick-hero">
+      <h2>Pick a place together</h2>
+      <p>Swipe right on places you'd go to and left on the rest. Then send the link to whoever's coming, and they swipe too.</p>
+    </div>
+    <div class="icon-filters" role="group" aria-label="Filter the places">${$("#icon-filters").innerHTML}</div>
+    <div class="section-row"><div class="section-label">${esc([SCOPE_LABEL[state.status], ...on].join(" · "))} · <span class="num">${pool.length}</span></div>${
+      on.length ? `<button type="button" class="link-btn" data-clear-all>Clear all</button>` : ""
+    }</div>
+    ${pool.length ? pickThumbs(used) : ""}
+    ${
+      pool.length > MAX_PICK
+        ? `<p class="hint">A pick takes up to ${MAX_PICK} places, so the ${MAX_PICK} ${state.sort === "home" && state.home ? "nearest home" : "first in the list's order"} are used. Add a filter to narrow it down.</p>`
+        : ""
+    }
+    ${
+      pool.length < 2
+        ? `<div class="notice">${pool.length ? "Only one place matches." : "Nothing matches."} A pick needs at least two. Clear a filter, or switch between To try, Visited and All.</div>`
+        : `<section class="panel pick-start">
+      <div class="segmented" role="group" aria-label="How it works">${Object.entries(PICK_MODES)
+        .map(([k, m]) => `<button type="button" data-pick-mode="${k}" aria-pressed="${mode === k}">${esc(m.name)}</button>`)
+        .join("")}</div>
+      <p class="hint">${esc(PICK_MODES[mode].help)}</p>
+      <label>Your name
+        <input type="text" id="pick-name" maxlength="24" autocomplete="given-name" value="${esc(name)}" placeholder="Shown next to what you keep" />
+      </label>
+      <button class="btn primary" type="button" data-pick="start">Start swiping ${used.length} places</button>
+    </section>`
+    }
+    ${going ? `<div class="section-label">Picks still going</div><div class="cards">${going}</div>` : ""}
+  </div>`;
+  renderIconFilters();
+}
+
+function renderPickJoin(el, d) {
+  const starter = d.people[0]?.name;
+  const n = d.mode === "relay" ? d.left.length : d.places.length;
+  const how =
+    d.mode === "relay"
+      ? "Swipe right on the ones you'd go to and left on the rest. Anything you drop is off the list for everyone."
+      : "Swipe right on the ones you'd go to and left on the rest. Everyone swipes the same places, and the most kept wins.";
+  el.innerHTML = `<div class="pick-join">
+    <div class="pick-hero">
+      <div class="kicker">${esc(starter ? `${starter} started a pick` : "A pick")} · ${esc(PICK_MODES[d.mode].name)}</div>
+      <h2>${esc(d.label || "Where should we go?")}</h2>
+      <p>${n} ${n === 1 ? "place" : "places"}${d.mode === "relay" && n < d.places.length ? " left" : ""}. ${esc(how)}</p>
+    </div>
+    ${pickThumbs(d.places.filter((p) => d.left.includes(p.id)))}
+    <form class="pick-start panel" data-pick-form="join">
+      <label>Your name
+        <input type="text" name="name" maxlength="24" autocomplete="given-name" required value="${esc(store.get(PICK_NAME_KEY) || (state.guest ? "" : state.viewer.name || ""))}" />
+      </label>
+      <button class="btn primary" type="submit">Start swiping</button>
+      <p class="hint">Your name shows next to what you keep. There's nothing to sign up for.</p>
+    </form>
+  </div>`;
+}
+
+function swipeCard(p, top) {
+  const src = media(p.photo_key);
+  const sub = [p.cuisine || p.category, cityOf(p), p.price_range].filter(Boolean).join(" · ");
+  const facts = [];
+  if (p.rating) facts.push(`<span>★ ${esc(p.rating.toFixed(1))}${p.rating_count ? ` <span class="dim">(${esc(p.rating_count.toLocaleString())})</span>` : ""}</span>`);
+  const h = hoursNow(p);
+  if (h) facts.push(`<span class="pill ${h.tone}">${esc(h.text)}</span>`);
+  if (goSoonActive(p)) facts.push(`<span class="pill hot">⏳ ${esc(p.go_soon)}</span>`);
+  const own = !state.guest && state.places.find((x) => x.id === p.id);
+  if (own?.distance_m != null) facts.push(`<span>${esc(fmtDist(own.distance_m))} from home</span>`);
+  const dishes = (p.dishes || []).slice(0, 4);
+  return `<article class="swipe-card${top ? " top" : ""}" data-card="${esc(p.id)}" ${top ? "" : 'aria-hidden="true"'}>
+    ${src ? `<img class="swipe-photo" src="${esc(src)}" alt="" decoding="async" draggable="false" />` : `<div class="swipe-photo glyph-bg" aria-hidden="true">${emoji(p.category)}</div>`}
+    <div class="stamp keep" aria-hidden="true">Keep</div>
+    <div class="stamp drop" aria-hidden="true">Nope</div>
+    <div class="swipe-info">
+      <h3>${esc(p.name)}</h3>
+      ${sub ? `<div class="sub">${esc(sub)}</div>` : ""}
+      ${facts.length ? `<div class="facts">${facts.join("")}</div>` : ""}
+      ${p.summary ? `<p class="summary">${esc(p.summary)}</p>` : ""}
+      ${dishes.length ? `<div class="dishes">${dishes.map((x) => `<span>${esc(x)}</span>`).join("")}</div>` : ""}
+      ${top ? `<button type="button" class="details-btn" data-open="${esc(p.id)}">Details</button>` : ""}
+    </div>
+  </article>`;
+}
+
+function renderSwipe(el, d) {
+  const byId = new Map(d.places.map((p) => [p.id, p]));
+  const [first, second] = d.todo.map((id) => byId.get(id)).filter(Boolean);
+  // Counted from this person's own swipes, so a drop doesn't make it go backwards.
+  const done = d.places.filter((p) => p.id in d.mine).length;
+  const total = done + d.todo.length;
+  el.innerHTML = `<div class="swipe">
+    <div class="swipe-top">
+      <div><strong>${esc(d.label || "Where should we go?")}</strong> <span class="hint num">${Math.min(done + 1, total)} of ${total}</span></div>
+      <button type="button" class="link-btn" data-pick="results">${d.mode === "relay" ? "What's left" : "Results"}</button>
+    </div>
+    <div class="swipe-stack" id="swipe-stack">${second ? swipeCard(second, false) : ""}${first ? swipeCard(first, true) : ""}</div>
+    <div class="swipe-actions">
+      <button type="button" class="swipe-btn drop" data-pick="drop" aria-label="Not this one"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      <button type="button" class="swipe-btn undo" data-pick="undo" aria-label="Undo" ${pickSwiped.length ? "" : "disabled"}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 010 11H11"/></svg></button>
+      <button type="button" class="swipe-btn keep" data-pick="keep" aria-label="Keep it"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 20.5s-8-4.9-8-10.9A4.6 4.6 0 0112 6.7a4.6 4.6 0 018 2.9c0 6-8 10.9-8 10.9z"/></svg></button>
+    </div>
+  </div>`;
+  bindSwipe();
+}
+
+/** Drag the top card left or right. A short flick counts too. */
+function bindSwipe() {
+  const card = $("#swipe-stack .swipe-card.top");
+  if (!card) return;
+  let start = null;
+  let dx = 0;
+  let dy = 0;
+  const reset = () => {
+    card.style.transform = "";
+    card.style.setProperty("--keep", 0);
+    card.style.setProperty("--drop", 0);
+  };
+  card.addEventListener("pointerdown", (e) => {
+    if (e.button > 0 || e.target.closest("button, a")) return;
+    start = { x: e.clientX, y: e.clientY, t: performance.now() };
+    dx = dy = 0;
+    card.setPointerCapture(e.pointerId);
+    card.classList.add("dragging");
+  });
+  card.addEventListener("pointermove", (e) => {
+    if (!start) return;
+    dx = e.clientX - start.x;
+    dy = e.clientY - start.y;
+    card.style.transform = `translate(${dx}px, ${dy * 0.25}px) rotate(${dx / 20}deg)`;
+    card.style.setProperty("--keep", Math.max(0, Math.min(1, dx / 90)));
+    card.style.setProperty("--drop", Math.max(0, Math.min(1, -dx / 90)));
+  });
+  const end = (e) => {
+    if (!start) return;
+    const fast = Math.abs(dx) / Math.max(1, performance.now() - start.t) > 0.5;
+    const tap = e.type === "pointerup" && Math.abs(dx) < 6 && Math.abs(dy) < 6;
+    start = null;
+    card.classList.remove("dragging");
+    if (Math.abs(dx) > 100 || (fast && Math.abs(dx) > 40)) return swipe(dx > 0);
+    reset();
+    if (tap) openPlace(card.dataset.card);
+  };
+  card.addEventListener("pointerup", end);
+  card.addEventListener("pointercancel", end);
+}
+
+function swipe(keep) {
+  const d = state.pick?.data;
+  const id = d?.todo[0];
+  if (!id) return;
+  d.todo = d.todo.slice(1);
+  d.mine = { ...d.mine, [id]: keep };
+  if (!keep && d.mode === "relay") d.left = d.left.filter((x) => x !== id);
+  pickSwiped.push(id);
+  const card = $("#swipe-stack .swipe-card.top");
+  if (card && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    card.classList.add(keep ? "fly-keep" : "fly-drop");
+    setTimeout(renderPick, 200);
+  } else renderPick();
+  sendVote(id, keep);
+}
+
+function undoSwipe() {
+  const d = state.pick?.data;
+  const id = pickSwiped.pop();
+  if (!d || !id) return;
+  delete d.mine[id];
+  d.todo = [id, ...d.todo.filter((x) => x !== id)];
+  if (!d.left.includes(id)) d.left = d.places.map((p) => p.id).filter((x) => x === id || d.left.includes(x));
+  state.pick.showResults = false;
+  renderPick();
+  sendVote(id, null);
+}
+
+/** Swipes go to the server one at a time, in order. The screen follows the server once they're all in. */
+function sendVote(placeId, keep) {
+  const token = state.pick.token;
+  pickInFlight++;
+  pickQueue = pickQueue
+    .then(() => pickApi(token, "vote", { place_id: placeId, keep }))
+    .then(
+      (data) => {
+        pickInFlight--;
+        if (pickInFlight || state.pick?.token !== token) return;
+        const localTop = state.pick.data.todo[0];
+        const changed = applyPick(data);
+        const onSwipe = !!$("#swipe-stack");
+        if (changed && (!onSwipe || data.todo[0] !== localTop || !data.todo.length) && !$("#swipe-stack .dragging")) renderPick();
+      },
+      (e) => {
+        pickInFlight--;
+        toast(e.message);
+        if (e.status === 404 || e.status === 410) {
+          pickEnded(token, e.status);
+          renderPick();
+        } else refreshPick();
+      },
+    );
+}
+
+async function vote(placeId, keep) {
+  const d = state.pick?.data;
+  if (!d) return;
+  d.mine = { ...d.mine, [placeId]: keep };
+  sendVote(placeId, keep);
+}
+
+function matchHero(p, kicker, again = false) {
+  const book = bookingLinks(p)[0];
+  const menu = menuFor(p);
+  return `<section class="match">
+    <div class="kicker">${kicker}</div>
+    <button type="button" class="match-card" data-open="${esc(p.id)}">
+      ${media(p.photo_key) ? `<img src="${esc(media(p.photo_key))}" alt="" decoding="async" />` : `<span class="glyph-bg" aria-hidden="true">${emoji(p.category)}</span>`}
+      <span class="match-name">${esc(p.name)}</span>
+      <span class="match-sub">${esc([p.cuisine || p.category, cityOf(p), p.price_range].filter(Boolean).join(" · "))}</span>
+    </button>
+    <div class="btn-row">
+      ${p.located ? `<a class="btn primary" href="${esc(mapsLink(p))}" target="_blank" rel="noopener">Directions</a>` : ""}
+      ${book ? `<a class="btn" href="${esc(book.href)}" target="_blank" rel="noopener">${esc(book.label === "Reserve a table" ? "Book" : `Book on ${book.label}`)}</a>` : ""}
+      ${menu ? `<a class="btn" href="${esc(menu)}" target="_blank" rel="noopener">Menu</a>` : ""}
+      ${again ? `<button class="btn" type="button" data-pick="random">Pick again</button>` : ""}
+    </div>
+  </section>`;
+}
+
+function pickItem(p, r, d) {
+  const mine = d.mine[p.id];
+  const tally = r
+    ? `<span class="tally-line">${r.kept_by.length ? `♥ ${esc(r.kept_by.join(", "))}` : ""}${r.kept_by.length && r.dropped_by.length ? " · " : ""}${
+        r.dropped_by.length ? `✕ ${esc(r.dropped_by.join(", "))}` : ""
+      }</span>`
+    : "";
+  const everyone = d.agreed.includes(p.id) ? ` <span class="pill visited">Everyone ♥</span>` : "";
+  return `<div class="pick-item">
+    <button type="button" class="pick-open" data-open="${esc(p.id)}">
+      ${thumb(p)}
+      <span class="main"><span class="title">${esc(p.name)}${everyone}</span><span class="sub">${esc([p.cuisine || p.category, cityOf(p), p.price_range].filter(Boolean).join(" · "))}</span>${tally}</span>
+    </button>
+    <div class="pick-vote">
+      <button type="button" class="mini-vote drop" data-pick="vote" data-id="${esc(p.id)}" data-keep="0" aria-pressed="${mine === false}" aria-label="Drop ${esc(p.name)}">✕</button>
+      <button type="button" class="mini-vote keep" data-pick="vote" data-id="${esc(p.id)}" data-keep="1" aria-pressed="${mine === true}" aria-label="Keep ${esc(p.name)}">♥</button>
+    </div>
+  </div>`;
+}
+
+/** Where "Pick one for us" chooses from: what everyone kept, or else the most kept. */
+function pickCandidates(d) {
+  if (d.agreed.length) return d.agreed;
+  if (d.mode === "relay") return d.left;
+  const top = d.ranking[0]?.kept_by.length || 0;
+  return top ? d.ranking.filter((r) => r.kept_by.length === top).map((r) => r.place_id) : [];
+}
+
+function renderPickResults(el, d) {
+  const byId = new Map(d.places.map((p) => [p.id, p]));
+  const rank = new Map(d.ranking.map((r) => [r.place_id, r]));
+  const alone = d.people.length < 2;
+  const waiting = d.people.filter((p) => !p.done && !p.me);
+  const mineLeft = d.todo.length;
+  const chosen = state.pick.chosen && byId.get(state.pick.chosen);
+  const candidates = pickCandidates(d);
+  let hero = "";
+  let head = "";
+  let matched = false;
+  if (chosen) hero = matchHero(chosen, "🎲 Picked for you", candidates.length > 1);
+  else if (d.mode === "relay" && !d.left.length) {
+    head = `<div class="empty"><h2>Nothing left</h2><p>Every place was dropped by someone.</p></div>`;
+  } else if (d.agreed.length === 1 && d.all_done) {
+    hero = matchHero(byId.get(d.agreed[0]), "🎉 It's a match");
+    matched = true;
+  }
+  else if (d.all_done && !alone) {
+    head =
+      d.agreed.length > 1
+        ? `<div class="pick-hero"><h2>Everyone's happy with ${d.agreed.length} places</h2><p>Pick one, or let the app choose.</p></div>`
+        : `<div class="pick-hero"><h2>No place everyone kept</h2><p>${candidates.length ? "The most kept are at the top." : "Nobody kept anything."}</p></div>`;
+  } else {
+    const n = d.mode === "relay" ? d.left.length : d.places.length;
+    const status = alone
+      ? d.mode === "relay"
+        ? `Send the link to whoever's coming. They'll see only ${n === 1 ? "this one" : `these ${n}`}.`
+        : "Send the link to whoever's coming. Everyone swipes the same places."
+      : waiting.length
+        ? `Waiting on ${waiting.map((p) => `${p.name} (${p.todo} to go)`).join(", ")}.`
+        : d.people.some((p) => !p.done)
+          ? "You still have cards to swipe."
+          : "";
+    head = `<div class="pick-hero"><h2>${d.mode === "relay" ? `${n} ${n === 1 ? "place" : "places"} left` : "So far"}</h2>${status ? `<p>${esc(status)}</p>` : ""}</div>`;
+  }
+  const people = `<div class="chip-row pick-people">${d.people
+    .map((p) => `<span class="chip${p.done ? " on" : ""}">${esc(p.me ? `${p.name} (you)` : p.name)}${p.done ? " ✓" : ` · ${p.todo} to go`}</span>`)
+    .join("")}</div>`;
+  const actions = `<div class="btn-row">
+    <button class="btn${alone || waiting.length ? " primary" : ""}" type="button" data-pick="share">Send the link</button>
+    ${mineLeft ? `<button class="btn" type="button" data-pick="swipe">Keep swiping (${mineLeft})</button>` : ""}
+    ${candidates.length > 1 && !chosen ? `<button class="btn" type="button" data-pick="random">Pick one for us</button>` : ""}
+  </div>`;
+  // A match in Pass it along is the only place left, and it's already at the top.
+  const listed = d.mode === "relay" ? (matched ? [] : d.left) : d.ranking.map((r) => r.place_id);
+  const list = listed.map((id) => byId.get(id) && pickItem(byId.get(id), rank.get(id), d)).filter(Boolean).join("");
+  const dropped = d.mode === "relay" ? d.places.filter((p) => !d.left.includes(p.id)) : [];
+  el.innerHTML = `<div class="pick-results">
+    ${hero}${head}${people}${actions}
+    ${list ? `<div class="section-label">${d.mode === "relay" ? "Still in" : "Most kept first"}</div><div class="cards pick-list">${list}</div>` : ""}
+    ${
+      dropped.length
+        ? `<details class="pick-dropped"><summary>Dropped · <span class="num">${dropped.length}</span></summary><div class="cards pick-list">${dropped
+            .map((p) => pickItem(p, rank.get(p.id), d))
+            .join("")}</div></details>`
+        : ""
+    }
+    <div class="pick-foot">
+      <span class="hint">${esc(PICK_MODES[d.mode].name)} · ${esc(timeLeft(d.expires_at))}</span>
+      ${state.guest ? "" : `<button class="link-btn" type="button" data-pick="new">New pick</button><button class="link-btn danger" type="button" data-pick="end">End this pick</button>`}
+    </div>
+  </div>`;
+}
+
+async function startPick() {
+  const used = pickPool().slice(0, MAX_PICK);
+  const box = $("#pick-name");
+  const name = box.value.trim();
+  if (!name) {
+    toast("Type your name first, so the others know who kept what.");
+    return box.focus();
+  }
+  store.set(PICK_NAME_KEY, name);
+  const btn = $('[data-pick="start"]');
+  btn.disabled = true;
+  try {
+    const data = await api("/api/picks", {
+      method: "POST",
+      body: { mode: state.pickMode, place_ids: used.map((p) => p.id), label: filterLabels().join(" · "), name, voter_id: voterId() },
+    });
+    state.pick = null;
+    applyPick(data);
+    state.picks = null;
+    renderPick();
+    schedulePickPoll();
+  } catch (e) {
+    if (!(e instanceof Unauthorized)) toast(e.message);
+    btn.disabled = false;
+  }
+}
+
+function sharePick() {
+  const d = state.pick?.data;
+  if (!d) return;
+  const n = d.mode === "relay" ? d.left.length : d.places.length;
+  const text =
+    d.mode === "relay"
+      ? `Help pick a place: ${n} left${d.label ? ` (${d.label})` : ""}. Swipe right on the ones you'd go to.`
+      : `Help pick a place${d.label ? ` (${d.label})` : ""}. Swipe right on the ones you'd go to.`;
+  shareLink(`${location.origin}/p/${d.token}`, "Pick a place", text);
+}
+
+async function pickAction(t) {
+  const act = t.dataset.pick;
+  if (act === "start") return startPick();
+  if (act === "open") return openPick(t.dataset.token);
+  if (act === "keep" || act === "drop") return swipe(act === "keep");
+  if (act === "undo") return undoSwipe();
+  if (act === "share") return sharePick();
+  if (act === "results" || act === "swipe") {
+    state.pick.showResults = act === "results";
+    return renderPick();
+  }
+  if (act === "vote") return vote(t.dataset.id, t.dataset.keep === "1");
+  if (act === "random") {
+    const from = pickCandidates(state.pick.data).filter((id) => id !== state.pick.chosen);
+    state.pick.chosen = from[Math.floor(Math.random() * from.length)] || state.pick.chosen;
+    renderPick();
+    return $("#view-pick").scrollTo({ top: 0, behavior: "smooth" });
+  }
+  if (act === "new") {
+    state.pick = null;
+    store.set(PICK_KEY, null);
+    renderPick();
+    return loadPickList();
+  }
+  if (act === "end") {
+    if (!confirmTwice(t, "Tap again to end it for everyone")) return;
+    await api(`/api/picks/${enc(state.pick.token)}`, { method: "DELETE" }).catch(() => {});
+    state.pick = null;
+    store.set(PICK_KEY, null);
+    toast("Pick ended. Its link doesn't work anymore.");
+    renderPick();
+    return loadPickList();
+  }
+}
+
+async function joinPickAs(name) {
+  store.set(PICK_NAME_KEY, name);
+  try {
+    applyPick(await pickApi(state.pick.token, "join", { name }));
+    renderPick();
+  } catch (e) {
+    toast(e.message);
+  }
 }
 
 /* ---------- settings ---------- */
@@ -1752,13 +2346,6 @@ function bindUI() {
       render();
     }),
   );
-  document.querySelectorAll("[data-browse]").forEach((b) =>
-    b.addEventListener("click", () => {
-      state.browse = b.dataset.browse;
-      savePrefs();
-      renderBrowse();
-    }),
-  );
   $("#open-filter").addEventListener("click", () => {
     state.openNow = !state.openNow;
     fitted = false;
@@ -1767,6 +2354,11 @@ function bindUI() {
   });
   $("#category-filter").addEventListener("change", (e) => {
     state.category = e.target.value;
+    fitted = false;
+    render();
+  });
+  $("#city-filter").addEventListener("change", (e) => {
+    state.city = e.target.value;
     fitted = false;
     render();
   });
@@ -1788,7 +2380,13 @@ function bindUI() {
   $("#me-btn").addEventListener("click", () => locateMe({ onMap: true }));
   $("#add-btn").addEventListener("click", () => openAdd());
   $("#backdrop").addEventListener("click", closeSheet);
-  document.addEventListener("keydown", (e) => e.key === "Escape" && state.sheet && closeSheet());
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && state.sheet) return closeSheet();
+    if (state.view === "pick" && !state.sheet && $("#swipe-stack") && !e.target.closest("input, textarea, select")) {
+      if (e.key === "ArrowRight") swipe(true);
+      if (e.key === "ArrowLeft") swipe(false);
+    }
+  });
   $("#login-form").addEventListener("submit", (e) => {
     e.preventDefault();
     login($("#login-code").value);
@@ -1797,33 +2395,24 @@ function bindUI() {
   // Delegated clicks for content that gets re-rendered.
   document.addEventListener("click", async (e) => {
     const t = e.target.closest(
-      "[data-open],[data-go],[data-filter],[data-clear-all],[data-theme-mode],[data-theme-accent],[data-cat],[data-city],[data-tag],[data-go-soon],[data-clear],[data-dismiss],[data-units],[data-copy],[data-copy-token],[data-export],[data-banner-close],[data-revoke-member],[data-revoke-link],[data-share-url],[data-debug-share],[data-copy-debug],[data-archived-view],[data-archive-closed],#recheck-btn,#refresh-btn,#signout-btn,#paste-btn,[data-act]",
+      "[data-open],[data-go],[data-filter],[data-more-filters],[data-pick],[data-pick-mode],[data-clear-all],[data-theme-mode],[data-theme-accent],[data-tag],[data-clear],[data-dismiss],[data-units],[data-copy],[data-copy-token],[data-export],[data-banner-close],[data-revoke-member],[data-revoke-link],[data-share-url],[data-debug-share],[data-copy-debug],[data-archived-view],[data-archive-closed],#recheck-btn,#refresh-btn,#signout-btn,#paste-btn,[data-act]",
     );
     if (!t) return;
     if (t.dataset.open) return openPlace(t.dataset.open);
+    if (t.dataset.moreFilters !== undefined) return openMoreFilters();
+    if (t.dataset.pick) return pickAction(t);
+    if (t.dataset.pickMode) {
+      state.pickMode = t.dataset.pickMode;
+      return renderPick();
+    }
     if (t.dataset.go) {
       closeSheet();
       return setView(t.dataset.go);
-    }
-    if (t.dataset.cat) {
-      startFresh();
-      state.category = t.dataset.cat;
-      return setView("list");
-    }
-    if (t.dataset.city !== undefined) {
-      startFresh();
-      state.city = t.dataset.city;
-      return setView("list");
     }
     if (t.dataset.tag) {
       closeSheet();
       startFresh();
       state.filters = [t.dataset.tag];
-      return setView("list");
-    }
-    if (t.dataset.goSoon) {
-      startFresh();
-      state.filters = ["go-soon"];
       return setView("list");
     }
     if (t.dataset.themeMode || t.dataset.themeAccent) {
@@ -1834,11 +2423,15 @@ function bindUI() {
       const f = t.dataset.filter;
       state.filters = state.filters.includes(f) ? state.filters.filter((x) => x !== f) : [...state.filters, f];
       fitted = false;
-      return render();
+      render();
+      if (state.sheet?.type === "more") openMoreFilters();
+      return;
     }
     if (t.dataset.clearAll !== undefined) {
       clearAllFilters();
-      return render();
+      render();
+      if (state.sheet?.type === "more") openMoreFilters();
+      return;
     }
     if (t.dataset.clear) {
       state[t.dataset.clear] = "";
@@ -1914,6 +2507,12 @@ function bindUI() {
 
   document.addEventListener("submit", async (e) => {
     const form = e.target;
+    if (form.dataset.pickForm === "join") {
+      e.preventDefault();
+      const name = form.elements.name.value.trim();
+      if (name) joinPickAs(name);
+      return;
+    }
     if (form.id === "home-form") {
       e.preventDefault();
       const address = $("#home-address").value.trim();
@@ -2013,6 +2612,7 @@ function bindUI() {
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && (state.token || state.guest)) refresh().catch(() => {});
+    if (document.visibilityState === "visible" && state.view === "pick" && !state.guest?.pick) refreshPick();
   });
 }
 
@@ -2123,10 +2723,10 @@ async function copy(text) {
 }
 
 /** The phone's share menu when there is one, otherwise copy the link. */
-async function shareLink(url, title) {
+async function shareLink(url, title, text) {
   if (navigator.share) {
     try {
-      await navigator.share({ title, url });
+      await navigator.share(text ? { title, text, url } : { title, url });
       return;
     } catch (e) {
       if (e?.name === "AbortError") return;
@@ -2161,6 +2761,22 @@ function guestToken() {
   return m ? m[1] : null;
 }
 
+function pickLinkToken() {
+  const m = location.pathname.match(/^\/p\/([\w-]{16,64})\/?$/);
+  return m ? m[1] : null;
+}
+
+/** Someone opened a pick's link without being signed in: just the pick, no tabs. */
+async function bootPickGuest(token) {
+  state.guest = { token: null, pick: token, label: "" };
+  state.pick = { token, data: null, ended: null };
+  document.body.classList.add("guest", "pick-only");
+  $("#tally").textContent = "Pick a place";
+  bindUI();
+  setView("pick");
+  await openPick(token);
+}
+
 async function bootGuest(token) {
   state.guest = { token, label: "" };
   document.body.classList.add("guest");
@@ -2176,13 +2792,16 @@ async function boot() {
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
   const token = guestToken();
   if (token) return bootGuest(token);
+  const pickLink = pickLinkToken();
+  if (pickLink && !store.get(TOKEN_KEY)) return bootPickGuest(pickLink);
 
   try {
     const prefs = JSON.parse(store.get(PREFS_KEY) || "{}");
-    if (["map", "list", "cats"].includes(prefs.view)) state.view = prefs.view;
+    if (["map", "list", "pick"].includes(prefs.view)) state.view = prefs.view;
+    // Browse is part of the list now.
+    if (prefs.view === "cats") state.view = "list";
     if (["want", "visited", "all"].includes(prefs.status)) state.status = prefs.status;
     if (["home", "new", "name"].includes(prefs.sort)) state.sort = prefs.sort;
-    if (["cats", "cities", "tags"].includes(prefs.browse)) state.browse = prefs.browse;
   } catch {
     /* ignore */
   }
@@ -2192,6 +2811,13 @@ async function boot() {
 
   const shared = readShareParams();
   if (shared) state.view = "list";
+  // A pick's link opened by someone who's signed in: show it on the Pick tab.
+  if (pickLink) {
+    store.set(PICK_KEY, pickLink);
+    pickLinkOpened = pickLink;
+    state.view = "pick";
+    history.replaceState(null, "", "/");
+  }
   setView(state.view);
 
   state.token = store.get(TOKEN_KEY) || "";

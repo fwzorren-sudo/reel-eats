@@ -1,6 +1,7 @@
 import { getHome, getSetting, now, placesDueForRefresh, setSetting, updatePlace } from "./db";
 import { saveImageFromUrl } from "./media";
 import { MENU_RECHECK_MS, refreshMenu } from "./menu";
+import { deleteOldPicks } from "./picks";
 import { PlacesError, placesClient } from "./places";
 import { fetchApifyUsage } from "./source";
 import type { ApifyUsage, Env, PlaceRow } from "./types";
@@ -20,6 +21,8 @@ export interface UpkeepReport {
   closed: string[];
   photos: number;
   menus: number;
+  /** Old picks cleared away. */
+  picks: number;
   apify: ApifyUsage | null;
 }
 
@@ -143,5 +146,6 @@ export async function runDailyUpkeep(env: Env): Promise<UpkeepReport> {
   const photos = await backfillPhotos(env);
   const { checked, closed } = await refreshPlaces(env);
   const menus = await backfillMenus(env);
-  return { checked, closed, photos, menus, apify };
+  const picks = await deleteOldPicks(env.DB);
+  return { checked, closed, photos, menus, picks, apify };
 }

@@ -48,6 +48,9 @@
         <select class="select-chip" id="category-filter" aria-label="Category">
           <option value="">Category</option>
         </select>
+        <select class="select-chip" id="city-filter" aria-label="City" hidden>
+          <option value="">City</option>
+        </select>
       </div>
       <div class="banner" id="banner" role="status" hidden></div>
     </header>
@@ -113,17 +116,16 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>
             Under $20
           </button>
+          <button type="button" class="icon-filter" data-more-filters aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+            <span>More<span class="count"></span></span>
+          </button>
         </div>
         <div id="list"></div>
       </section>
 
-      <section class="view padded" id="view-cats" aria-label="Browse" hidden>
-        <div class="segmented browse-switch" role="group" aria-label="Browse by">
-          <button type="button" data-browse="cats" aria-pressed="true">Categories</button>
-          <button type="button" data-browse="cities" aria-pressed="false">Cities</button>
-          <button type="button" data-browse="tags" aria-pressed="false">Occasions</button>
-        </div>
-        <div id="cats"></div>
+      <section class="view padded" id="view-pick" aria-label="Pick" hidden>
+        <div id="pick"></div>
       </section>
 
       <section class="view padded" id="view-settings" aria-label="Settings" hidden>
@@ -149,9 +151,9 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/></svg>
         List
       </button>
-      <button type="button" data-view="cats">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg>
-        Browse
+      <button type="button" data-view="pick">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6.5" y="3" width="11" height="15" rx="2.5" transform="rotate(8 12 10.5)"/><path d="M4.2 7.4l-.7 9.8a2.5 2.5 0 002.3 2.7l7.2.5"/><path d="M12 13.3s-2.8-1.7-2.8-3.8a1.6 1.6 0 012.8-1 1.6 1.6 0 012.8 1c0 2.1-2.8 3.8-2.8 3.8z"/></svg>
+        Pick
       </button>
       <button type="button" data-view="settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg>

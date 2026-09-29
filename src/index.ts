@@ -37,6 +37,26 @@ import { errorText, mergeAttempt, runTraced, Trace } from "./trace";
 import { backfillMenus, backfillPhotos, checkApifyUsage, DAILY_CRON, refreshPlaces, runDailyUpkeep } from "./upkeep";
 import { menuDue, refreshMenu } from "./menu";
 import {
+  castVote,
+  endPick,
+  getPick,
+  insertPick,
+  isInPick,
+  joinPick,
+  listPicks,
+  MAX_PICK_PEOPLE,
+  MAX_PICK_PLACES,
+  PICK_MODES,
+  PICK_TTL_MS,
+  pickName,
+  pickPlaces,
+  pickVotesAndPeople,
+  tallyPick,
+  validVoterId,
+  type PickMode,
+  type PickRow,
+} from "./picks";
+import {
   ARCHIVE_REASONS,
   CATEGORIES,
   type ApifyUsage,
@@ -508,6 +528,54 @@ async function handlePublic(env: Env, path: string): Promise<Response | null> {
   return null;
 }
 
+/** Everything a pick's page needs, for the person with this voter id. Places carry only what a read-only link shows. */
+async function pickState(env: Env, pick: PickRow, voterId: string | null) {
+  const [places, { people, votes }] = await Promise.all([
+    pickPlaces(env.DB, JSON.parse(pick.place_ids) as string[]),
+    pickVotesAndPeople(env.DB, pick.token),
+  ]);
+  return {
+    token: pick.token,
+    mode: pick.mode,
+    label: pick.label,
+    created_at: pick.created_at,
+    expires_at: pick.expires_at,
+    joined: !!voterId && people.some((p) => p.voter_id === voterId),
+    places: places.map(publicPlace),
+    ...tallyPick(pick.mode, places.map((p) => p.id), people, votes, voterId),
+  };
+}
+
+/** A pick's link works for anyone who has it, until it ends. */
+async function handlePick(req: Request, env: Env, url: URL, path: string, method: string): Promise<Response | null> {
+  const m = path.match(/^\/api\/pick\/([\w-]{16,64})(?:\/(join|vote))?$/);
+  if (!m) return null;
+  const pick = await getPick(env.DB, m[1]);
+  if (!pick) throw new HttpError(404, "This pick doesn't exist.");
+  if (pick.expires_at <= now()) throw new HttpError(410, "This pick has ended.");
+  if (!m[2]) {
+    if (method !== "GET") throw new HttpError(405, "Not allowed.");
+    const voter = url.searchParams.get("voter");
+    return json(await pickState(env, pick, validVoterId(voter) ? voter : null));
+  }
+  if (method !== "POST") throw new HttpError(405, "Not allowed.");
+  const body = (await req.json().catch(() => ({}))) as { voter_id?: unknown; name?: unknown; place_id?: unknown; keep?: unknown };
+  if (!validVoterId(body.voter_id)) throw new HttpError(400, "voter_id is missing.");
+  if (m[2] === "join") {
+    const name = pickName(body.name);
+    if (!name) throw new HttpError(400, "Type your name, so the others know who kept what.");
+    if (!(await joinPick(env.DB, pick.token, body.voter_id, name))) throw new HttpError(409, `This pick is full: it takes up to ${MAX_PICK_PEOPLE} people.`);
+    return json(await pickState(env, pick, body.voter_id));
+  }
+  if (!(await isInPick(env.DB, pick.token, body.voter_id))) throw new HttpError(403, "Type your name to join first.");
+  if (typeof body.place_id !== "string" || !(JSON.parse(pick.place_ids) as string[]).includes(body.place_id)) {
+    throw new HttpError(400, "That place isn't in this pick.");
+  }
+  if (body.keep !== true && body.keep !== false && body.keep !== null) throw new HttpError(400, "keep must be true, false or null.");
+  await castVote(env.DB, pick.token, body.voter_id, body.place_id, body.keep);
+  return json(await pickState(env, pick, body.voter_id));
+}
+
 async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL): Promise<Response> {
   const path = url.pathname.replace(/\/+$/, "");
   const method = req.method.toUpperCase();
@@ -515,6 +583,8 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
     const open = await handlePublic(env, path);
     if (open) return open;
   }
+  const pick = await handlePick(req, env, url, path, method);
+  if (pick) return pick;
 
   const viewer = await checkAuth(req, env);
   const db = env.DB;
@@ -721,6 +791,50 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
     const body = (await req.json().catch(() => ({}))) as { units?: string };
     if (body.units === "mi" || body.units === "km") await setSetting(db, "units", body.units);
     return json({ units: await getUnits(db) });
+  }
+
+  /* ----- Pick: start one from the current filters, and see the ones still going ----- */
+
+  if (path === "/api/picks" && method === "GET") {
+    const picks = await listPicks(db);
+    return json({
+      picks: picks.map((p) => ({
+        token: p.token,
+        mode: p.mode,
+        label: p.label,
+        created_at: p.created_at,
+        expires_at: p.expires_at,
+        places: (JSON.parse(p.place_ids) as string[]).length,
+        people: p.people,
+      })),
+    });
+  }
+  if (path === "/api/picks" && method === "POST") {
+    const body = (await req.json().catch(() => ({}))) as { mode?: string; place_ids?: unknown; label?: unknown; name?: unknown; voter_id?: unknown };
+    const mode: PickMode = (PICK_MODES as readonly string[]).includes(body.mode ?? "") ? (body.mode as PickMode) : "relay";
+    const ids = Array.isArray(body.place_ids) ? [...new Set(body.place_ids.filter((x): x is string => typeof x === "string"))] : [];
+    if (ids.length < 2) throw new HttpError(400, "A pick needs at least two places.");
+    if (ids.length > MAX_PICK_PLACES) throw new HttpError(400, `A pick takes up to ${MAX_PICK_PLACES} places. Narrow the filters first.`);
+    if ((await pickPlaces(db, ids)).length !== ids.length) throw new HttpError(400, "Some of those places aren't on the list anymore.");
+    const name = pickName(body.name) ?? viewer.name;
+    if (!name) throw new HttpError(400, "Type your name, so the others know who kept what.");
+    if (!validVoterId(body.voter_id)) throw new HttpError(400, "voter_id is missing.");
+    const at = now();
+    const created: PickRow = {
+      token: randomToken(),
+      mode,
+      label: typeof body.label === "string" ? body.label.trim().slice(0, 80) || null : null,
+      place_ids: JSON.stringify(ids),
+      created_at: at,
+      expires_at: at + PICK_TTL_MS,
+    };
+    await insertPick(db, created);
+    await joinPick(db, created.token, body.voter_id, name);
+    return json(await pickState(env, created, body.voter_id));
+  }
+  if ((m = path.match(/^\/api\/picks\/([\w-]{16,64})$/)) && method === "DELETE") {
+    if (!(await endPick(db, m[1]))) throw new HttpError(404, "That pick has already ended.");
+    return json({ ok: true });
   }
 
   /* ----- owner only: partner codes, read-only links, upkeep ----- */

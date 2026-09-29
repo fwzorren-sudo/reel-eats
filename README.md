@@ -7,10 +7,10 @@ It runs on free tiers. You don't need a Claude or OpenAI key.
 The phone app has four views:
 
 - **Map**: every saved place as a pin, colored by whether you've been, with your home marked. A button shows where you are now.
-- **List**: each place with the reel's cover image, open or closed right now, how far it is, and Google's price range. Sort by distance from home, distance from where you are, newest, or name. Search matches names, dishes, cities, tags and notes. A row of filter icons (Go soon, Date night, Coffee, Cocktails, Brunch, Outdoor, Late night, Under $20) narrows the list and the map; pick several to see places that have them all.
-- **Browse**: tiles by category (Pizza, Coffee & Cafe), by city, or by occasion (date night, outdoor seating, and "Go soon" for new openings and pop-ups). Tapping one shows just that group, in place of whatever was filtered before, and lights up its icon on the list when it has one.
+- **List**: each place with the reel's cover image, open or closed right now, how far it is, and Google's price range. Sort by distance from home, distance from where you are, newest, or name. Search matches names, dishes, cities, tags and notes. A row of filter icons (Go soon, Date night, Coffee, Cocktails, Brunch, Outdoor, Late night, Under $20) narrows the list and the map; pick several to see places that have them all. **More** at the end of the row has the other occasions (rooftop, work-friendly, groups and so on), each with how many places it would leave.
+- **Pick**: choose where to go with whoever's coming. See [Pick a place together](#pick-a-place-together).
 
-Filters (category, city, occasions, Open now) apply to the map and the list alike. The list's heading and a bar on the map say which are on, and **Clear all** there, or in a "No matches" message, shows everything again.
+Filters (To try or Visited, Open now, category, city, occasions) apply to the map, the list and Pick alike. The city menu appears next to the category menu once your places are in more than one city. The list's heading and a bar on the map say which filters are on, and **Clear all** there, or in a "No matches" message, shows everything again.
 - **Settings**: home address, a color theme (Berry, Ocean, Teal, Grape, Espresso or Slate, light, dark or matching the phone, kept on each phone), sharing setup, partner codes, read-only links, Apify credit, and exports to CSV, JSON or Google My Maps.
 
 **Open now** at the top filters every view to places open at this moment, in each place's own time zone. Together with the location button or "Nearest me", that's "what's open near me".
@@ -152,14 +152,14 @@ Install the app from Chrome as in setup step 7. After that, **Reel Eats** appear
 
 ## Using the app
 
-- **To try, Visited, All**: the switch at the top filters every view. **Open now** and the category menu next to it narrow further.
-- **Browse**: switch between Categories, Cities and Occasions. "Go soon" collects new openings, pop-ups and limited-time items. The note fades after a few months, since "just opened" stops being true.
+- **To try, Visited, All**: the switch at the top filters every view. **Open now** and the category and city menus next to it narrow further.
+- **Go soon**: collects new openings, pop-ups and limited-time items. The note fades after a few months, since "just opened" stops being true.
 - **Nearest branch**: the detail card says "Closest of 3 locations found". Open **All 3 locations** to see every branch Google found and switch to another. A branch you pick stays put when you move house; **Use the closest branch** goes back.
 - **Pop-ups and events**: when a reel is about a pop-up, takeover, seasonal menu or limited-time event, Reel Eats keeps the branch in the reel instead of the one nearest home, since that's where it's happening.
 - **Look again**: open **Look again** on a place, say what's off ("it's a cocktail bar", "wrong branch, it's the Midtown one", "the pop-up ends Nov 1"), and tick **Wrong place or branch** if it is. The reel is read again with its whole transcript and the restaurant's menu page, and the app suggests changes, plus other places on Google Maps when the box is ticked. Tick what to keep and tap **Apply**; nothing changes before that. It works without a note too, but a note is what makes it reliable. In a test of eight fixes on saved places it got all eight right, in 2 to 8 seconds each. Each look uses a few dozen Workers AI units, plus up to three Google searches when the box is ticked.
 - **Wrong match**: open **Wrong place?** on the detail card, search Google Maps, and pick the right result. Picking a different restaurant renames the place; picking another branch of the same one keeps it through moves.
 - **Fixing details**: tap the pencil at the top of a place, or open **Edit details**, to change its name, category, cuisine, summary, dishes, Instagram account, menu link, "go soon" note and occasions. A menu link set or cleared here stays; the app stops looking for one on the website.
-- **Archive**: for places you've decided against, that closed, or that are too far. Tap **Archive** on a place and optionally pick a reason: Not for me, Closed, Too far or Other. Archived places leave the map, the list, Browse, shared links and the monthly re-check, but keep their rating and notes. Sharing another reel of one doesn't save it again. They're under **Archived** at the bottom of the list, where **Unarchive** puts one back. **Delete** removes a place for good.
+- **Archive**: for places you've decided against, that closed, or that are too far. Tap **Archive** on a place and optionally pick a reason: Not for me, Closed, Too far or Other. Archived places leave the map, the list, Pick, shared links and the monthly re-check, but keep their rating and notes. Sharing another reel of one doesn't save it again. They're under **Archived** at the bottom of the list, where **Unarchive** puts one back. **Delete** removes a place for good.
 - **Moving house**: save the new address in Settings. Distances update right away, and chains switch to the closest branch Reel Eats already knows about. Tap **Re-check nearest branches** to search again around the new home.
 - **Closures**: once a day the Worker re-checks places that haven't been checked for a month, updating hours, ratings and whether Google lists them as closed. A place that closed for good gets a red label, and the list shows a notice with a button to archive it. **Refresh hours and closures** in Settings runs the check now.
 - **A partner's own code**: in Settings, under **Partner access**, type their name and tap **Make a code**. They sign in with that code, and it also works in their own iPhone Shortcut. What they save shows "Added by" with their name. They can't see or change partner codes or links. **Turn off** stops a code right away.
@@ -167,6 +167,17 @@ Install the app from Chrome as in setup step 7. After that, **Reel Eats** appear
 - **Google My Maps**: **Google My Maps (KML)** in Settings downloads a file. In Google My Maps, create a map, tap **Import**, and pick it. Each pin has the category, status, tags, reel and Google Maps link, so My Maps can color pins by category.
 - **Backups**: Settings also exports the whole list as CSV or JSON. Both include every other location found; JSON has each one's address, coordinates, phone and Google Maps link.
 - **Debugging details**: at the bottom of each place, the owner can open a log of every attempt to process the reels behind it: what started it, which outside calls were made (Apify, Instagram, Google, Workers AI, Claude, the cover image), how long each took, what came back, and how it ended. A failed share in "Just shared" has a **Details** button with the same log. **Copy log** copies it as JSON. The last five attempts per reel are kept.
+
+## Pick a place together
+
+The **Pick** tab turns the places your filters show into a stack of big cards. Swipe right (or tap ♥) on the ones you'd go to and left (✕) on the rest. **Undo** takes back the last swipe, and tapping a card opens its details. Then **Send the link** to whoever's coming. They open it in any browser, type a name, and swipe too; they don't need an access code or an account.
+
+There are two ways to run one:
+
+- **Pass it along** (the default): each person sees only what's left, and a place anyone drops is gone for everyone. Keep sending it on until one place is left. When everyone has kept the same one, it's a match, with buttons for directions, booking and the menu.
+- **Everyone votes**: everyone swipes the whole set. The results are ranked by how many people kept each place, and a place everyone kept is marked **Everyone ♥**.
+
+The results show who has finished and who still has cards to swipe, and they update every few seconds while open. You can change your mind on any place there with its ✕ and ♥. When several places are left, **Pick one for us** chooses at random. A pick takes up to 40 places (the nearest ones, when more match) and up to 12 people. Its link stops working after a day, or when you tap **End this pick**. Like a read-only link, it shows no notes, home address or distances from home. Picks still going are listed on the Pick tab, and the daily job clears away old ones.
 
 Every minute the Worker also finishes any share whose background job was cut short, so a reel you shared still lands within a minute or two even if you never open the app. Background work gets only 30 seconds on Cloudflare, so when Apify is slow to read a reel, the rest of the work is handed to that job instead of being cut off halfway.
 
@@ -232,7 +243,7 @@ npm run typecheck
 
 ### Testing without real API keys
 
-`test/e2e/mock-upstreams.mjs` stands in for the three Apify actors, Google Places, Claude and a web page. `test/e2e/smoke.mjs` runs the whole API against `wrangler dev`. It covers mentions, location tags, pins, chains, list reels, duplicates, a second creator's reel, the fallback reader, transcripts, tags, hours, cover images, retries, typed names, branch switching, moving house, partner codes, read-only links, the monthly re-check, price ranges, review summaries and their daily cap, and menu links. `test/e2e/wrangler.e2e.jsonc` is the same Worker without the Workers AI binding, because that binding always needs a Cloudflare login.
+`test/e2e/mock-upstreams.mjs` stands in for the three Apify actors, Google Places, Claude and a web page. `test/e2e/smoke.mjs` runs the whole API against `wrangler dev`. It covers mentions, location tags, pins, chains, list reels, duplicates, a second creator's reel, the fallback reader, transcripts, tags, hours, cover images, retries, typed names, branch switching, moving house, partner codes, read-only links, the monthly re-check, price ranges, review summaries and their daily cap, menu links, and both kinds of pick. `test/e2e/wrangler.e2e.jsonc` is the same Worker without the Workers AI binding, because that binding always needs a Cloudflare login.
 
 ```sh
 node test/e2e/mock-upstreams.mjs 8799 &
@@ -256,6 +267,7 @@ To run the scheduled jobs locally, open `http://localhost:8787/cdn-cgi/handler/s
 | `src/upkeep.ts` | The daily job: Google re-checks, cover-image backfill, menu links, Apify credit |
 | `src/menu.ts` | Finding the menu link on a restaurant's website |
 | `src/lookagain.ts` | Look again: the second read of a saved place and its suggestions |
+| `src/picks.ts` | Pick: who kept and dropped what, and its tables |
 | `src/source.ts` | Reading reels through Apify, Instagram's public page, TikTok and other links |
 | `src/tags.ts` | Occasion tags and "go soon" notes found in captions and transcripts |
 | `src/media.ts` | Keeping copies of reel cover images |

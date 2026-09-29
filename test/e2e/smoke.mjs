@@ -434,6 +434,65 @@ r = await call(`/api/places/${tt.id}`, { method: "PATCH", body: { branch_id: "tt
 assert.equal(r.data.place.keep_branch, 1, "a branch picked by hand is kept");
 step("keeps the branch in the reel for a pop-up, and a branch picked by hand, through moves and re-checks");
 
+/* ----- Pick: swipe a short list with whoever's going out ----- */
+const pickable = (await call("/api/state")).data.places.filter((x) => !x.archived_at).slice(0, 4);
+assert.equal(pickable.length, 4);
+const [pa, pb, pc, pd] = pickable.map((x) => x.id);
+const pick = (token, action, body) =>
+  fetch(`${BASE}/api/pick/${token}${action ? `/${action}` : ""}`, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}).then(
+    async (x) => ({ status: x.status, data: await x.json() }),
+  );
+r = await call("/api/picks", { method: "POST", body: { mode: "relay", place_ids: [pa], name: "Alex", voter_id: "voter-alex" } });
+assert.equal(r.status, 400, "a pick needs two places");
+r = await call("/api/picks", { method: "POST", body: { mode: "relay", place_ids: [pa, pb, pc, pd], label: "To try · Pizza", name: "Alex", voter_id: "voter-alex" } });
+assert.equal(r.status, 200, JSON.stringify(r.data));
+const relay = r.data.token;
+assert.deepEqual(r.data.todo, [pa, pb, pc, pd]);
+assert.deepEqual(r.data.people, [{ name: "Alex", me: true, done: false, todo: 4 }]);
+for (const key of ["notes", "distance_m", "branches", "added_by"]) assert.equal(r.data.places[0][key], undefined, `${key} stays private`);
+for (const [id, keep] of [[pa, true], [pb, false], [pc, true], [pd, true]]) await pick(relay, "vote", { voter_id: "voter-alex", place_id: id, keep });
+r = await pick(relay);
+assert.equal(r.status, 200, "anyone with the link can open it, without the access code");
+assert.deepEqual(r.data.left, [pa, pc, pd]);
+assert.equal(r.data.joined, false);
+r = await pick(relay, "vote", { voter_id: "voter-sam1", place_id: pa, keep: true });
+assert.equal(r.status, 403, "has to type a name first");
+r = await pick(relay, "join", { voter_id: "voter-sam1", name: "  " });
+assert.equal(r.status, 400);
+r = await pick(relay, "join", { voter_id: "voter-sam1", name: "Sam" });
+assert.deepEqual(r.data.todo, [pa, pc, pd], "Sam gets only what Alex kept");
+await pick(relay, "vote", { voter_id: "voter-sam1", place_id: pa, keep: true });
+await pick(relay, "vote", { voter_id: "voter-sam1", place_id: pc, keep: false });
+r = await pick(relay, "vote", { voter_id: "voter-sam1", place_id: pc, keep: null });
+assert.deepEqual(r.data.left, [pa, pc, pd], "taking back a drop brings the place back");
+await pick(relay, "vote", { voter_id: "voter-sam1", place_id: pc, keep: false });
+r = await pick(relay, "vote", { voter_id: "voter-sam1", place_id: pd, keep: true });
+assert.deepEqual(r.data.left, [pa, pd]);
+assert.deepEqual(r.data.agreed, [pa, pd]);
+assert.equal(r.data.all_done, true);
+r = await pick(relay, "vote", { voter_id: "voter-sam1", place_id: "not-in-it", keep: true });
+assert.equal(r.status, 400);
+step("passes a pick along by link: each person swipes what's left, and a drop by anyone takes the place out");
+
+r = await call("/api/picks", { method: "POST", body: { mode: "vote", place_ids: [pa, pb, pc], name: "Alex", voter_id: "voter-alex" } });
+const vote = r.data.token;
+await pick(vote, "join", { voter_id: "voter-sam1", name: "Sam" });
+for (const [who, id, keep] of [["alex", pa, false], ["alex", pb, true], ["alex", pc, true], ["sam1", pa, true], ["sam1", pb, false], ["sam1", pc, true]]) {
+  await pick(vote, "vote", { voter_id: `voter-${who}`, place_id: id, keep });
+}
+r = await fetch(`${BASE}/api/pick/${vote}?voter=voter-sam1`).then((x) => x.json());
+assert.deepEqual(r.left, [pa, pb, pc], "everyone swipes the whole set");
+assert.equal(r.ranking[0].place_id, pc);
+assert.deepEqual(r.ranking[0].kept_by, ["Alex", "Sam"]);
+assert.deepEqual(r.agreed, [pc]);
+assert.deepEqual(r.mine, { [pa]: true, [pb]: false, [pc]: true });
+r = await call("/api/picks");
+assert.deepEqual(r.data.picks.map((x) => [x.mode, x.places, x.people]), [["vote", 3, ["Alex", "Sam"]], ["relay", 4, ["Alex", "Sam"]]]);
+await call(`/api/picks/${vote}`, { method: "DELETE" });
+assert.equal((await pick(vote)).status, 410, "an ended pick's link stops working");
+assert.equal((await fetch(`${BASE}/api/pick/nope-nope-nope-nope-nope`)).status, 404);
+step("lets everyone vote on the whole set, ranks by keeps, and ends a pick");
+
 /* ----- a reel that's slow to read, shared in the background ----- */
 r = await call("/api/share", { method: "POST", body: { url: IG("SLOW1") } });
 assert.equal(r.status, 202, JSON.stringify(r.data));
