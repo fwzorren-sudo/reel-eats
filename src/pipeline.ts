@@ -394,8 +394,8 @@ async function processTraced(env: Env, shareId: string, opts: ProcessOptions, tr
       if (best) seenGoogle.add(best.id);
       if (!best && anyFound && !fromClaude) continue;
       const opening = single ? (meta?.caption || share.shared_text || "").slice(0, 200) : "";
-      const category = best && p.category_from_google ? categoryFor(best, p.cuisine, p.dishes, opening) : p.category;
       const tags = cleanTags(p.tags, postTags, priceTags(best?.priceLevel));
+      const category = best && p.category_from_google ? categoryFor(best, p.cuisine, p.dishes, opening, tags) : p.category;
       // A pop-up or seasonal note from the rules is more specific than AI's "now open".
       const goSoon = (postGoSoon && postGoSoon !== "New opening" ? postGoSoon : "") || p.go_soon || postGoSoon || null;
       const handle = p.instagram_handle || handleFor(best?.name ?? p.name, meta) || null;

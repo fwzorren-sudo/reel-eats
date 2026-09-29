@@ -382,6 +382,14 @@ describe("categories when Google only says restaurant (reels from Sep 28)", () =
   it("falls back to the post's opening line", () => {
     expect(categoryFor(generic("Hamp & Harry's"), "", [], "pov: you find a Wizardry Themed Pop - Up Bar just north of Atlanta!")).toBe("Bar & Drinks");
   });
+  it("goes by the post's tags when nothing else says what it is", () => {
+    const lab = generic("Sip and Science The Drunken Laboratory");
+    const opening = "☀️ ATLANTA ☀️ Looking for a date night you’ll actually remember? 🧪💙 Grab your partner and experience hands-on science experiments, great drinks";
+    expect(categoryFor(lab, "", [], opening)).toBe("Other");
+    expect(categoryFor(lab, "", [], opening, ["cocktails", "date night"])).toBe("Bar & Drinks");
+    // The tags come last: a named cuisine still wins.
+    expect(categoryFor(generic("Valenza"), "Italian", [], "", ["cocktails"])).toBe("Italian");
+  });
   it("names a single branch without Google's branch suffix", () => {
     const h = generic("Habaneros | Midtown");
     expect(businessName(h, [h])).toBe("Habaneros");

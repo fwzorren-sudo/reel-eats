@@ -303,16 +303,24 @@ export function guessCategory(texts: (string | null | undefined)[]): Category {
   return "Other";
 }
 
+/** When nothing else says what a place is, the post's own tags. */
+const TAG_CATEGORIES: [string, Category][] = [
+  ["cocktails", "Bar & Drinks"],
+  ["coffee date", "Coffee & Cafe"],
+  ["brunch", "Breakfast & Brunch"],
+];
+
 /**
  * Google's type first. When it only says "restaurant", the cuisine and dishes from the post,
- * then the name, then the post's opening line ("Wizardry Themed Pop-Up Bar").
+ * then the name, then the post's opening line ("Wizardry Themed Pop-Up Bar"), and last the
+ * post's tags: Google calls The Drunken Laboratory a restaurant, but the reel is about drinks.
  */
-export function categoryFor(c: PlaceCandidate, cuisine = "", dishes: string[] = [], postOpening = ""): Category {
+export function categoryFor(c: PlaceCandidate, cuisine = "", dishes: string[] = [], postOpening = "", tags: string[] = []): Category {
   for (const texts of [[c.primaryType, c.typeLabel], [cuisine, ...dishes], [c.name, ...c.types], [postOpening]]) {
     const guess = guessCategory(texts);
     if (guess !== "Other") return guess;
   }
-  return "Other";
+  return TAG_CATEGORIES.find(([tag]) => tags.includes(tag))?.[1] ?? "Other";
 }
 
 export function cuisineFor(c: PlaceCandidate): string {
