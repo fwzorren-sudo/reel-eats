@@ -255,6 +255,34 @@ r = await call("/api/state");
 assert.equal(byGoogle(r.data.places, "tdn").menu_url, `${MOCK}/site/tdn/menu`);
 step("opens a place with Google's review summary and features, the price range, and a menu link from the restaurant's site");
 
+r = await call(`/api/places/${tdn.id}`, {
+  method: "PATCH",
+  body: {
+    summary: "Birria tacos worth the trip to Queens.",
+    dishes: "birria tacos, consomé, Birria Tacos, ",
+    instagram_handle: "https://www.instagram.com/tacosdelnorte/?hl=en",
+    menu_url: "tacosdelnorte.example/menu.pdf",
+  },
+});
+assert.equal(r.status, 200, JSON.stringify(r.data));
+assert.equal(r.data.place.summary, "Birria tacos worth the trip to Queens.");
+assert.deepEqual(list(r.data.place.dishes), ["birria tacos", "consomé"]);
+assert.equal(r.data.place.instagram_handle, "tacosdelnorte");
+assert.equal(r.data.place.menu_url, "https://tacosdelnorte.example/menu.pdf");
+assert.equal(r.data.place.menu_by_hand, 1);
+r = await call(`/api/places/${tdn.id}`, { method: "PATCH", body: { instagram_handle: "not a handle!" } });
+assert.equal(r.status, 400);
+r = await call(`/api/places/${tdn.id}`, { method: "PATCH", body: { menu_url: "javascript:alert(1)" } });
+assert.equal(r.status, 400);
+r = await call(`/api/places/${tdn.id}/google`);
+assert.equal(r.data.menu_url, "https://tacosdelnorte.example/menu.pdf", "a menu link set by hand isn't searched for again");
+r = await call(`/api/places/${tdn.id}`, { method: "PATCH", body: { menu_url: "" } });
+assert.equal(r.data.place.menu_url, null);
+assert.equal(r.data.place.menu_by_hand, 1, "clearing it by hand also sticks");
+upstream = await fetch(`${MOCK}/__calls`).then((x) => x.json());
+assert.equal(upstream["site tdn"], 1);
+step("edits the summary, dishes, Instagram account and menu link by hand, and keeps a hand-set menu link");
+
 const shack = byGoogle(places, "ss_hs");
 r = await call(`/api/places/${shack.id}`, { method: "PATCH", body: { branch_id: "ss_msp" } });
 assert.equal(r.data.place.google_place_id, "ss_msp");

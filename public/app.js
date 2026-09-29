@@ -1094,12 +1094,14 @@ function closeSheet() {
   }
 }
 
-function sheetHead(title, kicker) {
+function sheetHead(title, kicker, buttons = "") {
   return `<div class="sheet-head">
     <div><h2 id="sheet-title">${esc(title)}</h2>${kicker ? `<div class="kicker">${kicker}</div>` : ""}</div>
-    <button class="round-btn sheet-close" type="button" data-act="close" aria-label="Close">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
-    </button>
+    <div class="sheet-actions">${buttons}
+      <button class="round-btn sheet-close" type="button" data-act="close" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
   </div>`;
 }
 
@@ -1112,6 +1114,7 @@ const ICON = {
   person: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>',
   play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>',
   menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>',
+  pencil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>',
 };
 
 /** Where to book. A booking-site website or a booking link in the caption wins; otherwise search. */
@@ -1278,7 +1281,7 @@ function openPlace(id, { keepScroll = false } = {}) {
       </form>
     </details>
 
-    <details class="more">
+    <details class="more" id="edit-details">
       <summary>Edit details</summary>
       <form class="stack" data-act-form="edit">
         <label>Name <input type="text" id="edit-name" value="${esc(p.name)}" /></label>
@@ -1286,13 +1289,26 @@ function openPlace(id, { keepScroll = false } = {}) {
           <select class="field" id="edit-category">${CATEGORIES.map((c) => `<option ${c === p.category ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>
         </label>
         <label>Cuisine <input type="text" id="edit-cuisine" value="${esc(p.cuisine || "")}" /></label>
+        <label>Summary <textarea id="edit-summary" maxlength="300" rows="2">${esc(p.summary || "")}</textarea></label>
+        <label>Dishes <input type="text" id="edit-dishes" placeholder="Commas between them: birria tacos, consomé" value="${esc((p.dishes || []).join(", "))}" /></label>
+        <label>Instagram account <input type="text" id="edit-instagram" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="@restaurant" value="${esc(p.instagram_handle ? `@${p.instagram_handle}` : "")}" /></label>
+        <label>Menu link <input type="url" id="edit-menu" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="https://… (empty for none)" value="${esc(menuFor(p))}" data-was="${esc(menuFor(p))}" />
+          <span class="hint">${
+            p.menu_by_hand
+              ? "Set by hand, so the app won't change it."
+              : menuFor(p)
+                ? "Found on the restaurant's website. Change it if it's wrong, or clear it if there isn't one."
+                : "None found on the restaurant's website. Paste one if you know it."
+          }</span>
+        </label>
         <label>Go soon <input type="text" id="edit-go-soon" maxlength="80" placeholder="New opening, pop-up through Oct 12" value="${esc(p.go_soon || "")}" /></label>
         <fieldset class="tag-editor"><legend>Good for</legend>${tagEditor}</fieldset>
         <div class="btn-row"><button class="btn primary" type="submit">Save changes</button></div>
       </form>
     </details>`;
 
-  const html = `${sheetHead(p.name, kicker)}
+  const editBtn = guest ? "" : `<button class="round-btn" type="button" data-act="edit-open" aria-label="Edit details">${ICON.pencil}</button>`;
+  const html = `${sheetHead(p.name, kicker, editBtn)}
   <div class="sheet-body">
     ${
       isArchived(p) && !guest
@@ -1344,8 +1360,13 @@ function mapsLink(p) {
   return safeUrl(p.maps_url) || `https://www.google.com/maps/search/?api=1&query=${enc([p.name, p.address || p.city_hint].filter(Boolean).join(" "))}`;
 }
 
+/** The menu link to show: set by hand, or found on the website the place has now. */
+function menuFor(p) {
+  return p.menu_url && (state.guest || p.menu_by_hand || p.menu_checked_for === p.website) ? safeUrl(p.menu_url) : "";
+}
+
 function menuButton(p) {
-  const menu = p.menu_url && (state.guest || p.menu_checked_for === p.website) ? safeUrl(p.menu_url) : "";
+  const menu = menuFor(p);
   if (menu) return `<a class="btn" id="menu-btn" href="${esc(menu)}" target="_blank" rel="noopener">${ICON.menu}Menu</a>`;
   // Google's API doesn't hand out the menu photos people post, but the Maps app shows them.
   if (p.located) return `<a class="btn" id="menu-btn" href="${esc(mapsLink(p))}" target="_blank" rel="noopener">${ICON.menu}Menu on Google Maps</a>`;
@@ -1367,6 +1388,9 @@ async function loadGoogleExtras(id) {
   if ("menu_url" in data) {
     p.menu_url = data.menu_url;
     p.menu_checked_for = data.menu_checked_for;
+    p.menu_by_hand = data.menu_by_hand;
+    const box = $("#edit-menu");
+    if (box && box.value === box.dataset.was) box.value = box.dataset.was = menuFor(p);
   }
   if (state.sheet?.type === "place" && state.sheet.id === id) showGoogleExtras(p, data);
 }
@@ -1849,11 +1873,20 @@ function bindUI() {
     if (form.dataset.actForm === "edit") {
       e.preventDefault();
       const tags = [...form.querySelectorAll('input[name="tag"]:checked')].map((x) => x.value);
-      return patchPlace(
-        state.sheet.id,
-        { name: $("#edit-name").value, category: $("#edit-category").value, cuisine: $("#edit-cuisine").value, go_soon: $("#edit-go-soon").value, tags },
-        "Saved.",
-      );
+      const body = {
+        name: $("#edit-name").value,
+        category: $("#edit-category").value,
+        cuisine: $("#edit-cuisine").value,
+        summary: $("#edit-summary").value,
+        dishes: $("#edit-dishes").value.split(","),
+        instagram_handle: $("#edit-instagram").value,
+        go_soon: $("#edit-go-soon").value,
+        tags,
+      };
+      // Only a changed menu link counts as set by hand.
+      const menu = $("#edit-menu");
+      if (menu.value.trim() !== menu.dataset.was) body.menu_url = menu.value;
+      return patchPlace(state.sheet.id, body, "Saved.");
     }
   });
 
@@ -1897,6 +1930,14 @@ async function sheetAction(t) {
   const act = t.dataset.act;
   const id = state.sheet?.id;
   if (act === "close") return closeSheet();
+  if (act === "edit-open") {
+    const box = $("#edit-details");
+    if (!box) return;
+    box.open = true;
+    box.scrollIntoView({ behavior: "smooth", block: "start" });
+    $("#edit-name")?.focus({ preventScroll: true });
+    return;
+  }
   const p = state.places.find((x) => x.id === id);
   if (!p) return;
   if (act === "show-on-map") {

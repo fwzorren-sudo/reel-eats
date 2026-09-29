@@ -338,6 +338,23 @@ async function patchPlace(env: Env, place: PlaceRow, body: Record<string, unknow
   if (body.summary !== undefined) f.summary = text(body.summary, 300) || null;
   if (body.notes !== undefined) f.notes = text(body.notes, 2000) || null;
   if (body.go_soon !== undefined) f.go_soon = text(body.go_soon, 80) || null;
+  if (body.dishes !== undefined) {
+    const list = Array.isArray(body.dishes) ? body.dishes : typeof body.dishes === "string" ? body.dishes.split(",") : null;
+    if (!list) throw new HttpError(400, "Dishes must be a list.");
+    const seen = new Set<string>();
+    const dishes = list
+      .map((d) => (typeof d === "string" ? d.trim().slice(0, 80) : ""))
+      .filter((d) => d && !seen.has(d.toLowerCase()) && seen.add(d.toLowerCase()));
+    f.dishes = JSON.stringify(dishes.slice(0, 12));
+  }
+  if (body.instagram_handle !== undefined) f.instagram_handle = instagramHandle(body.instagram_handle);
+  // A menu link set here, or cleared, stays: the daily search no longer changes it.
+  if (body.menu_url !== undefined) {
+    f.menu_url = menuLink(body.menu_url);
+    f.menu_by_hand = 1;
+    f.menu_checked_for = place.website;
+    f.menu_checked_at = now();
+  }
   if (body.tags !== undefined) {
     if (!Array.isArray(body.tags)) throw new HttpError(400, "Tags must be a list.");
     f.tags = JSON.stringify(cleanTags(body.tags));
@@ -381,6 +398,31 @@ async function patchPlace(env: Env, place: PlaceRow, body: Record<string, unknow
   return updatePlace(env.DB, place.id, f);
 }
 
+/** "@lucali", "instagram.com/lucali" or a full link, as "lucali". Empty means none. */
+function instagramHandle(v: unknown): string | null {
+  if (typeof v !== "string") throw new HttpError(400, "Instagram account must be text.");
+  const s = v.trim();
+  if (!s) return null;
+  const handle = (s.match(/instagram\.com\/([^/?#\s]+)/i)?.[1] ?? s).replace(/^@/, "");
+  if (!/^[A-Za-z0-9._]{1,30}$/.test(handle)) throw new HttpError(400, "That doesn't look like an Instagram account.");
+  return handle;
+}
+
+/** A web address for the menu. "example.com/menu" gets https:// added. Empty means none. */
+function menuLink(v: unknown): string | null {
+  if (v === null) return null;
+  if (typeof v !== "string") throw new HttpError(400, "The menu link must be a web address.");
+  const s = v.trim();
+  if (!s) return null;
+  try {
+    const url = new URL(/^[a-z][a-z0-9+.-]*:/i.test(s) ? s : `https://${s}`);
+    if ((url.protocol === "https:" || url.protocol === "http:") && url.hostname.includes(".")) return url.href.slice(0, 1000);
+  } catch {
+    /* not a URL */
+  }
+  throw new HttpError(400, "The menu link must be a web address, like https://example.com/menu.");
+}
+
 const SCOPE_STATUSES = ["want", "visited", "all"] as const;
 
 /** What a read-only link shows. Notes, your home, distances and who added what stay private. */
@@ -405,7 +447,7 @@ function publicPlace(p: PlaceRow) {
     rating_count: p.rating_count,
     price_level: p.price_level,
     price_range: p.price_range,
-    menu_url: p.menu_checked_for === p.website ? p.menu_url : null,
+    menu_url: p.menu_by_hand || p.menu_checked_for === p.website ? p.menu_url : null,
     business_status: p.business_status,
     branch_count: p.branch_count,
     visit_status: p.visit_status,
@@ -610,7 +652,7 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
     const menu = menuDue(place) ? refreshMenu(env, place).catch(() => place) : Promise.resolve(place);
     const extras: Promise<GoogleExtras> = place.google_place_id ? googleExtras(env, place.google_place_id) : Promise.resolve({ summary: null, features: [] });
     const [withMenu, got] = await Promise.all([menu, extras]);
-    return json({ ...got, menu_url: withMenu.menu_url, menu_checked_for: withMenu.menu_checked_for });
+    return json({ ...got, menu_url: withMenu.menu_url, menu_checked_for: withMenu.menu_checked_for, menu_by_hand: withMenu.menu_by_hand });
   }
 
   if (path === "/api/search" && method === "GET") {

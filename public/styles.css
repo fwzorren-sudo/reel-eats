@@ -839,7 +839,7 @@ input[type="file"]::file-selector-button {
 }
 .sheet-head h2 { margin: 0; font: 800 23px/1.15 var(--display); letter-spacing: -0.01em; text-wrap: balance; }
 .sheet-head .kicker { color: var(--muted); font-size: 13px; font-weight: 600; margin-top: 4px; }
-.sheet-close { margin-left: auto; flex: none; }
+.sheet-actions { margin-left: auto; flex: none; display: flex; gap: 8px; }
 .sheet-body { overflow-y: auto; padding: 14px 16px calc(env(safe-area-inset-bottom, 0px) + 20px); display: grid; gap: 16px; }
 .facts { display: grid; gap: 10px; }
 .fact { display: grid; grid-template-columns: 22px 1fr; gap: 10px; align-items: start; font-size: 14px; }

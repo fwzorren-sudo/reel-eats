@@ -107,7 +107,7 @@ export async function backfillPhotos(env: Env, limit = PHOTOS_PER_RUN): Promise<
  */
 export async function backfillMenus(env: Env, limit = MENUS_PER_RUN): Promise<number> {
   const { results } = await env.DB.prepare(
-    `SELECT * FROM places WHERE archived_at IS NULL AND website IS NOT NULL AND website != ''
+    `SELECT * FROM places WHERE archived_at IS NULL AND website IS NOT NULL AND website != '' AND menu_by_hand = 0
        AND (menu_checked_for IS NULL OR menu_checked_for != website OR coalesce(menu_checked_at, 0) < ?)
      ORDER BY coalesce(menu_checked_at, 0), created_at LIMIT ?`,
   )

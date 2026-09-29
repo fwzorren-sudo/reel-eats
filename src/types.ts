@@ -285,6 +285,8 @@ export interface PlaceRow {
   /** The website that was searched for a menu link, and when. */
   menu_checked_for: string | null;
   menu_checked_at: number | null;
+  /** 1 when the menu link was set or cleared by hand. The daily search leaves it alone. */
+  menu_by_hand: number;
 }
 
 export const ARCHIVE_REASONS = ["not-for-me", "closed", "too-far", "other"] as const;

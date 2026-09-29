@@ -76,9 +76,9 @@ export async function findMenuLink(website: string): Promise<string | null> {
   return pickMenuLink(html, res.url || website);
 }
 
-/** Does this place's menu link need looking for: never done, a different website, or a month old? */
-export function menuDue(p: Pick<PlaceRow, "website" | "menu_checked_for" | "menu_checked_at">, at = now()): boolean {
-  if (!p.website) return false;
+/** Does this place's menu link need looking for: never done, a different website, or a month old? Not if it was set by hand. */
+export function menuDue(p: Pick<PlaceRow, "website" | "menu_checked_for" | "menu_checked_at"> & { menu_by_hand?: number }, at = now()): boolean {
+  if (!p.website || p.menu_by_hand) return false;
   return p.menu_checked_for !== p.website || (p.menu_checked_at ?? 0) < at - MENU_RECHECK_MS;
 }
 
