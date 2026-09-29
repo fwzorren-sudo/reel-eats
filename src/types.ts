@@ -18,6 +18,8 @@ export interface Env {
   APIFY_TRANSCRIPTS?: string;
   /** Workers AI model used to read captions, or "off". */
   AI_MODEL?: string;
+  /** Workers AI model for "Look again" on a saved place. Default: Qwen 3.8. */
+  LOOK_AGAIN_MODEL?: string;
   /** Optional. With a key set, Claude identifies venues instead of Workers AI. */
   ANTHROPIC_API_KEY?: string;
   CLAUDE_MODEL?: string;

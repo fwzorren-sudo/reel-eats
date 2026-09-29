@@ -1268,6 +1268,19 @@ function openPlace(id, { keepScroll = false } = {}) {
       </label>
     </div>
 
+    <details class="more" id="look-again">
+      <summary>Look again</summary>
+      <form class="stack" data-act-form="look-again">
+        <p class="hint">Something off? Say what, and the reel is read again, with the menu page when there is one. Nothing changes until you pick what to apply.</p>
+        <label>What's off? <span class="hint">Optional</span>
+          <textarea id="look-note" maxlength="500" rows="2" placeholder="It's a cocktail bar · wrong branch, it's the Midtown one · the pop-up ends Nov 1"></textarea>
+        </label>
+        <label class="check-row"><input type="checkbox" id="look-wrong" /> <span>Wrong place or branch</span></label>
+        <div class="btn-row"><button class="btn primary" type="submit" id="look-go">Look again</button></div>
+        <div id="look-results" aria-live="polite"></div>
+      </form>
+    </details>
+
     ${branchList}
 
     <details class="more" ${p.located ? "" : "open"}>
@@ -1350,6 +1363,89 @@ function openPlace(id, { keepScroll = false } = {}) {
   openSheet(html, { type: "place", id });
   if (prevScroll) $("#sheet .sheet-body").scrollTop = prevScroll;
   if (p.located && !guest) loadGoogleExtras(id);
+}
+
+/* ---------- Look again ---------- */
+let lookResult = null;
+
+const LOOK_LABELS = {
+  category: "Category",
+  cuisine: "Cuisine",
+  summary: "Summary",
+  dishes: "Dishes",
+  tags_add: "Add tags",
+  tags_remove: "Remove tags",
+  go_soon: "Go soon",
+  instagram_handle: "Instagram",
+};
+
+function describeSuggestion(s) {
+  if (s.field === "dishes" || s.field === "tags_add" || s.field === "tags_remove") return s.to.join(", ");
+  if (s.field === "instagram_handle") return `@${s.to}`;
+  if (s.field === "summary") return `“${s.to}”`;
+  const to = s.to || "none";
+  return s.from ? `${s.from} → ${to}` : to;
+}
+
+async function runLookAgain(p) {
+  const out = $("#look-results");
+  const btn = $("#look-go");
+  const wrong = $("#look-wrong").checked;
+  btn.disabled = true;
+  btn.textContent = "Looking…";
+  out.innerHTML = `<p class="hint">Reading the reel again${wrong ? " and searching Google Maps" : ""}. This takes a few seconds.</p>`;
+  try {
+    const data = await api(`/api/places/${p.id}/look-again`, { method: "POST", body: { note: $("#look-note").value, wrong_place: wrong } });
+    lookResult = { id: p.id, data };
+    const changes = data.suggestions.map(
+      (s, i) => `<label class="check-row"><input type="checkbox" name="look-apply" value="${i}" checked /> <span><strong>${esc(LOOK_LABELS[s.field] || s.field)}:</strong> ${esc(describeSuggestion(s))}</span></label>`,
+    );
+    const others = data.candidates.filter((c) => c.id !== p.google_place_id);
+    const places = wrong
+      ? `<fieldset class="suggestions"><legend>Right place?</legend>
+          <label class="check-row"><input type="radio" name="look-place" value="" ${others.length ? "" : "checked"} /> <span>Keep ${esc(p.name)}${p.address ? `<span class="hint"> · ${esc(p.address)}</span>` : ""}</span></label>
+          ${others
+            .map(
+              (c, i) => `<label class="check-row"><input type="radio" name="look-place" value="${esc(c.id)}" ${i === 0 ? "checked" : ""} /> <span><strong>${esc(c.name)}</strong><span class="hint"> · ${esc(c.address)}${c.distanceM != null && !state.guest ? ` · ${esc(fmtDist(c.distanceM))}` : ""}</span></span></label>`,
+            )
+            .join("")}
+          ${others.length ? "" : `<p class="hint">Google Maps had nothing else for “${esc(data.query)}”. Try saying the name and neighborhood above.</p>`}
+        </fieldset>`
+      : "";
+    const any = changes.length || others.length;
+    out.innerHTML = `<div class="look-results">
+        ${changes.length ? `<fieldset class="suggestions"><legend>Suggested changes</legend>${changes.join("")}</fieldset>` : ""}
+        ${places}
+        ${any ? `<div class="btn-row"><button class="btn primary" type="button" data-act="look-apply">Apply</button></div>` : `<p>Nothing to change. Saying what's off above helps.</p>`}
+      </div>`;
+  } catch (e) {
+    out.innerHTML = e instanceof Unauthorized ? "" : `<p class="hint">${esc(e.message)}</p>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Look again";
+  }
+}
+
+async function applyLookAgain(p) {
+  if (!lookResult || lookResult.id !== p.id) return;
+  const picked = [...document.querySelectorAll('input[name="look-apply"]:checked')].map((x) => lookResult.data.suggestions[Number(x.value)]);
+  const placeId = document.querySelector('input[name="look-place"]:checked')?.value || "";
+  const body = {};
+  for (const s of picked) if (!s.field.startsWith("tags_")) body[s.field] = s.to;
+  const add = picked.filter((s) => s.field === "tags_add").flatMap((s) => s.to);
+  const remove = picked.filter((s) => s.field === "tags_remove").flatMap((s) => s.to);
+  if (add.length || remove.length) body.tags = [...(p.tags || []).filter((t) => !remove.includes(t)), ...add];
+  try {
+    // The place first: switching places replaces its name, address and branches.
+    if (placeId && placeId !== p.google_place_id) await api(`/api/places/${p.id}/select`, { method: "POST", body: { place_id: placeId, rename: true } });
+    if (Object.keys(body).length) await api(`/api/places/${p.id}`, { method: "PATCH", body });
+    lookResult = null;
+    googleExtras.delete(p.id);
+    await refresh({ rerenderSheet: true });
+    toast(picked.length || placeId ? "Updated." : "Nothing picked.");
+  } catch (e) {
+    if (!(e instanceof Unauthorized)) toast(e.message);
+  }
 }
 
 /* ---------- Google's review summary, features and menu link ---------- */
@@ -1870,6 +1966,12 @@ function bindUI() {
       e.preventDefault();
       return searchGoogle($("#place-search").value.trim());
     }
+    if (form.dataset.actForm === "look-again") {
+      e.preventDefault();
+      const p = state.places.find((x) => x.id === state.sheet?.id);
+      if (p) runLookAgain(p);
+      return;
+    }
     if (form.dataset.actForm === "edit") {
       e.preventDefault();
       const tags = [...form.querySelectorAll('input[name="tag"]:checked')].map((x) => x.value);
@@ -1940,6 +2042,7 @@ async function sheetAction(t) {
   }
   const p = state.places.find((x) => x.id === id);
   if (!p) return;
+  if (act === "look-apply") return applyLookAgain(p);
   if (act === "show-on-map") {
     closeSheet();
     setView("map");

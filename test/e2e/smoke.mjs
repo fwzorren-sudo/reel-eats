@@ -304,6 +304,13 @@ assert.equal(r.data.place.located, 1);
 assert.equal(r.data.place.name, "Grandma's Kitchen");
 step("searches Google Maps and attaches a location to an unlocated place");
 
+r = await call(`/api/places/${popup.id}/select`, { method: "POST", body: { place_id: "katz" } });
+assert.equal(r.data.place.name, "Katz's Delicatessen");
+assert.equal(r.data.place.branch_count, 1);
+assert.deepEqual(list(r.data.place.branches).map((b) => b.id), ["katz"]);
+assert.equal(r.data.place.keep_branch, 0);
+step("switching to a different restaurant renames the place and replaces its branch list");
+
 await call("/api/home", { method: "PUT", body: { address: "Lucali Brooklyn, NY" } });
 places = (await call("/api/state")).data.places;
 assert.ok(byGoogle(places, "lucali").distance_m < 50);

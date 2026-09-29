@@ -860,6 +860,11 @@ input[type="file"]::file-selector-button {
 .feature-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .feature { padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); font-size: 12px; font-weight: 600; }
 .btn svg { width: 16px; height: 16px; flex: none; }
+.check-row { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; font-weight: 500; line-height: 1.4; }
+.check-row input { margin-top: 3px; flex: none; width: 18px; height: 18px; accent-color: var(--accent); }
+.look-results { display: grid; gap: 10px; }
+.suggestions { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 0; display: grid; gap: 10px; }
+.suggestions legend { font-weight: 700; font-size: 14px; padding: 0 4px; }
 .stars { display: flex; gap: 4px; }
 .stars button { border: 0; background: none; font-size: 26px; line-height: 1; padding: 2px; color: var(--line); }
 .stars button.on { color: #e0a100; }

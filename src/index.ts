@@ -28,8 +28,9 @@ import {
 } from "./db";
 import { distanceMeters } from "./geo";
 import { isSupportedImageType } from "./extract";
-import { engineFor, placesClient, processShare, recheckPlace, rereadShare, summarize } from "./pipeline";
-import { geocodeHome, PlacesError, type PlaceExtras } from "./places";
+import { businessName, engineFor, placesClient, processShare, recheckPlace, rereadShare, storedMeta, summarize } from "./pipeline";
+import { lookAgain } from "./lookagain";
+import { branchSummary, geocodeHome, PlacesError, type PlaceExtras } from "./places";
 import { canonicalUrl, extractFirstUrl } from "./source";
 import { cleanTags } from "./tags";
 import { errorText, mergeAttempt, runTraced, Trace } from "./trace";
@@ -634,14 +635,57 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
       const updated = await recheckPlace(env, place);
       return json({ found: !!updated, place: updated ?? place });
     }
-    const body = (await req.json().catch(() => ({}))) as { place_id?: string };
+    const body = (await req.json().catch(() => ({}))) as { place_id?: string; rename?: boolean };
     if (!body.place_id) throw new HttpError(400, "place_id is required.");
     const home = await getHome(db);
     const chosen = await placesClient(env).details(body.place_id, home);
     if (!chosen) throw new HttpError(404, "Google couldn't find that place.");
     const fields: Partial<PlaceRow> = { ...candidateFields(chosen), refreshed_at: now() };
-    if (!place.located) fields.name = chosen.name;
+    const known = (JSON.parse(place.branches || "[]") as PlaceCandidate[]).some((b) => b.id === chosen.id);
+    // A different restaurant takes its own name; another branch keeps the one you know it by.
+    if (!place.located || body.rename || !known) fields.name = businessName(chosen, [chosen]);
+    if (known) {
+      // Another branch of the same place, picked by hand: keep it through moves and re-checks.
+      fields.keep_branch = 1;
+    } else {
+      // A different place altogether: the old branches, and the old site's menu link, don't apply.
+      Object.assign(fields, {
+        branches: JSON.stringify([branchSummary(chosen)]),
+        branch_count: 1,
+        multi_location: 0,
+        keep_branch: 0,
+        menu_url: null,
+        menu_checked_for: null,
+        menu_checked_at: null,
+        menu_by_hand: 0,
+      });
+    }
     return json({ place: await updatePlace(db, place.id, fields) });
+  }
+
+  // A second, slower read of a place, steered by what the person says is off. Only suggests.
+  if ((m = path.match(/^\/api\/places\/([\w-]+)\/look-again$/)) && method === "POST") {
+    const place = await getPlace(db, m[1]);
+    if (!place) throw new HttpError(404, "Place not found.");
+    const body = (await req.json().catch(() => ({}))) as { note?: unknown; wrong_place?: unknown };
+    const share = place.share_id ? await getShare(db, place.share_id) : null;
+    const { results: sources } = await db
+      .prepare("SELECT source_caption FROM place_sources WHERE place_id = ? AND (share_id IS NULL OR share_id != ?) AND source_caption IS NOT NULL")
+      .bind(place.id, place.share_id ?? "")
+      .all<{ source_caption: string }>();
+    try {
+      const result = await lookAgain(env, {
+        place,
+        meta: share ? storedMeta(share) : null,
+        sharedText: share?.shared_text ?? (share ? null : place.source_caption),
+        otherCaptions: sources.map((s) => s.source_caption),
+        note: typeof body.note === "string" ? body.note.trim().slice(0, 500) : "",
+        wrongPlace: body.wrong_place === true,
+      });
+      return json(result);
+    } catch (err) {
+      throw new HttpError(502, err instanceof Error ? err.message : String(err));
+    }
   }
 
   // Opening a place: Google's review summary and features (fetched each time, never stored),

@@ -156,7 +156,8 @@ Install the app from Chrome as in setup step 7. After that, **Reel Eats** appear
 - **Browse**: switch between Categories, Cities and Occasions. "Go soon" collects new openings, pop-ups and limited-time items. The note fades after a few months, since "just opened" stops being true.
 - **Nearest branch**: the detail card says "Closest of 3 locations found". Open **All 3 locations** to see every branch Google found and switch to another. A branch you pick stays put when you move house; **Use the closest branch** goes back.
 - **Pop-ups and events**: when a reel is about a pop-up, takeover, seasonal menu or limited-time event, Reel Eats keeps the branch in the reel instead of the one nearest home, since that's where it's happening.
-- **Wrong match**: open **Wrong place?** on the detail card, search Google Maps, and pick the right result.
+- **Look again**: open **Look again** on a place, say what's off ("it's a cocktail bar", "wrong branch, it's the Midtown one", "the pop-up ends Nov 1"), and tick **Wrong place or branch** if it is. The reel is read again with its whole transcript and the restaurant's menu page, and the app suggests changes, plus other places on Google Maps when the box is ticked. Tick what to keep and tap **Apply**; nothing changes before that. It works without a note too, but a note is what makes it reliable. In a test of eight fixes on saved places it got all eight right, in 2 to 8 seconds each. Each look uses a few dozen Workers AI units, plus up to three Google searches when the box is ticked.
+- **Wrong match**: open **Wrong place?** on the detail card, search Google Maps, and pick the right result. Picking a different restaurant renames the place; picking another branch of the same one keeps it through moves.
 - **Fixing details**: tap the pencil at the top of a place, or open **Edit details**, to change its name, category, cuisine, summary, dishes, Instagram account, menu link, "go soon" note and occasions. A menu link set or cleared here stays; the app stops looking for one on the website.
 - **Archive**: for places you've decided against, that closed, or that are too far. Tap **Archive** on a place and optionally pick a reason: Not for me, Closed, Too far or Other. Archived places leave the map, the list, Browse, shared links and the monthly re-check, but keep their rating and notes. Sharing another reel of one doesn't save it again. They're under **Archived** at the bottom of the list, where **Unarchive** puts one back. **Delete** removes a place for good.
 - **Moving house**: save the new address in Settings. Distances update right away, and chains switch to the closest branch Reel Eats already knows about. Tap **Re-check nearest branches** to search again around the new home.
@@ -190,6 +191,7 @@ These live under `vars` in `wrangler.jsonc`. Redeploy after editing.
 | --- | --- | --- |
 | `AI_MODEL` | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | Workers AI model that reads captions. Set it to `off` to use only pins, tags and mentions. |
 | `GOOGLE_EXTRAS_PER_DAY` | `30` | Most Google review summaries fetched a day. `0` turns them off. |
+| `LOOK_AGAIN_MODEL` | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | Workers AI model for Look again. Others, such as `@cf/qwen/qwen3.8-27b`, work but were slower in testing (20 to 60 seconds). |
 | `APIFY_POST_ACTOR` | `data-slayer~instagram-post-details` | Main Apify reader. Set it to `off` to use only the fallback. |
 | `APIFY_ACTOR` | `apify~instagram-scraper` | Fallback reader when the main one fails. `apify~instagram-reel-scraper` also works. |
 | `APIFY_TRANSCRIPT_ACTOR` | `apple_yang~instagram-transcripts-scraper` | Reads what's said in the video. |
@@ -253,6 +255,7 @@ To run the scheduled jobs locally, open `http://localhost:8787/cdn-cgi/handler/s
 | `src/pipeline.ts` | Processing a share from start to finish |
 | `src/upkeep.ts` | The daily job: Google re-checks, cover-image backfill, menu links, Apify credit |
 | `src/menu.ts` | Finding the menu link on a restaurant's website |
+| `src/lookagain.ts` | Look again: the second read of a saved place and its suggestions |
 | `src/source.ts` | Reading reels through Apify, Instagram's public page, TikTok and other links |
 | `src/tags.ts` | Occasion tags and "go soon" notes found in captions and transcripts |
 | `src/media.ts` | Keeping copies of reel cover images |
