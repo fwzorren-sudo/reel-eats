@@ -13,7 +13,10 @@ const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/6
 
 const ANCHOR = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
 const HREF = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
-const SOCIAL = /(^|\.)(instagram|facebook|tiktok|twitter|x|yelp|tripadvisor|google)\.com$/i;
+const SOCIAL = /(^|\.)(instagram|facebook|tiktok|twitter|x|yelp|tripadvisor)\.com$/i;
+// A menu kept in Google Docs or Drive counts; a link to the place on Google Maps doesn't.
+const GOOGLE_MAPS = (u: URL) =>
+  (/(^|\.)google\.[a-z.]+$/i.test(u.hostname) && (/^maps\./i.test(u.hostname) || u.pathname.startsWith("/maps"))) || /(^|\.)goo\.gl$/i.test(u.hostname);
 const DELIVERY = /(^|\.)(doordash|ubereats|grubhub|postmates|seamless)\.com$/i;
 
 const decode = (s: string) =>
@@ -50,7 +53,7 @@ export function pickMenuLink(html: string, pageUrl: string): string | null {
     if (url.protocol !== "https:" && url.protocol !== "http:") continue;
     const inAddress = /menu/i.test(url.pathname + url.search + url.hash);
     if (!labelled && !inAddress) continue;
-    if (SOCIAL.test(url.hostname)) continue;
+    if (SOCIAL.test(url.hostname) || GOOGLE_MAPS(url)) continue;
     // "#menu" on the same page is a section worth jumping to; the page itself, or "#", is not.
     if (samePage(url, page) && url.hash.length < 2) continue;
     const score = (labelled ? 2 : 0) + (inAddress ? 1 : 0) + (/\.pdf($|\?)/i.test(url.pathname) ? 1 : 0) - (DELIVERY.test(url.hostname) ? 2 : 0);

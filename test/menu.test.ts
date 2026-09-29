@@ -36,6 +36,13 @@ describe("finding a menu link on a restaurant's site", () => {
     expect(pickMenuLink(html, "https://example.com/")).toBe("https://example.com/menu");
   });
 
+  it("takes a menu kept in Google Docs, but not the place on Google Maps", () => {
+    const docs = "https://docs.google.com/gview?embedded=1&url=https%3A%2F%2Ffiles.example.com%2Fmenu.pdf";
+    expect(pickMenuLink(page(`<a href="${docs.replace(/&/g, "&amp;")}">Click here to explore our full menu.</a>`), "https://unknownatlanta.com/")).toBe(docs);
+    expect(pickMenuLink(page('<a href="https://www.google.com/maps/place/Unknown">Menu &amp; directions</a>'), "https://unknownatlanta.com/")).toBeNull();
+    expect(pickMenuLink(page('<a href="https://maps.google.com/?cid=1">See menu</a>'), "https://unknownatlanta.com/")).toBeNull();
+  });
+
   it("reads an icon link's aria-label", () => {
     expect(pickMenuLink(page('<a href="/food" aria-label="View our menu"><svg></svg></a>'), "https://example.com/")).toBe("https://example.com/food");
   });
