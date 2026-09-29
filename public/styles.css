@@ -474,6 +474,26 @@ main { position: relative; flex: 1; min-height: 0; }
 }
 .home-pin svg { width: 18px; height: 18px; }
 .leaflet-div-icon { background: none; border: 0; }
+.map-filters {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  z-index: 450;
+  max-width: calc(100% - 90px);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 4px 4px 12px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  font-weight: 600;
+}
+.map-filters[hidden] { display: none; }
+.map-filters > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-filters .link-btn { margin-left: 0; flex: none; }
 .me-dot {
   width: 18px;
   height: 18px;
@@ -513,7 +533,7 @@ main { position: relative; flex: 1; min-height: 0; }
 .section-row { display: flex; align-items: baseline; gap: 8px; margin: 18px 2px 8px; }
 .section-row:first-child { margin-top: 0; }
 .section-row .section-label { margin: 0; }
-.link-btn { margin-left: auto; border: 0; background: none; padding: 4px 6px; min-height: 28px; color: var(--accent); font-weight: 700; font-size: 13px; }
+.link-btn { margin-left: auto; flex: none; white-space: nowrap; border: 0; background: none; padding: 4px 6px; min-height: 28px; color: var(--accent); font-weight: 700; font-size: 13px; }
 .place-card .price { font-weight: 700; color: var(--text); opacity: 0.8; }
 .search {
   flex: 1;

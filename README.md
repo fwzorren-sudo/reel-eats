@@ -7,8 +7,10 @@ It runs on free tiers. You don't need a Claude or OpenAI key.
 The phone app has four views:
 
 - **Map**: every saved place as a pin, colored by whether you've been, with your home marked. A button shows where you are now.
-- **List**: each place with the reel's cover image, open or closed right now, how far it is, and Google's price range. Sort by distance from home, distance from where you are, newest, or name. Search matches names, dishes, cities, tags and notes. A row of filter icons (Go soon, Date night, Coffee, Cocktails, Brunch, Outdoor, Late night, Under $20) narrows the list; pick several to see places that have them all.
-- **Browse**: tiles by category (Pizza, Coffee & Cafe), by city, or by occasion (date night, outdoor seating, and "Go soon" for new openings and pop-ups). Tap one to filter the list.
+- **List**: each place with the reel's cover image, open or closed right now, how far it is, and Google's price range. Sort by distance from home, distance from where you are, newest, or name. Search matches names, dishes, cities, tags and notes. A row of filter icons (Go soon, Date night, Coffee, Cocktails, Brunch, Outdoor, Late night, Under $20) narrows the list and the map; pick several to see places that have them all.
+- **Browse**: tiles by category (Pizza, Coffee & Cafe), by city, or by occasion (date night, outdoor seating, and "Go soon" for new openings and pop-ups). Tapping one shows just that group, in place of whatever was filtered before, and lights up its icon on the list when it has one.
+
+Filters (category, city, occasions, Open now) apply to the map and the list alike. The list's heading and a bar on the map say which are on, and **Clear all** there, or in a "No matches" message, shows everything again.
 - **Settings**: home address, a color theme (Berry, Ocean, Teal, Grape, Espresso or Slate, light, dark or matching the phone, kept on each phone), sharing setup, partner codes, read-only links, Apify credit, and exports to CSV, JSON or Google My Maps.
 
 **Open now** at the top filters every view to places open at this moment, in each place's own time zone. Together with the location button or "Nearest me", that's "what's open near me".

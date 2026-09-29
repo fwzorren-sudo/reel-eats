@@ -87,10 +87,8 @@ const state = {
   status: "want",
   category: "",
   city: "",
-  tag: "",
-  goSoon: false,
   openNow: false,
-  /** The filter icons on the list page. Every one that's on has to match. */
+  /** Occasions, "go soon" and "under $20", from the list's icons, Browse or a tag. Every one has to match. */
   filters: [],
   search: "",
   sort: "home",
@@ -341,9 +339,38 @@ function visiblePlaces({ ignoreCategory = false, ignoreBrowse = false } = {}) {
       (ignoreCategory || !state.category || p.category === state.category) &&
       (!state.openNow || openNow(p)) &&
       (ignoreBrowse || !state.city || cityOf(p) === state.city) &&
-      (ignoreBrowse || !state.tag || p.tags.includes(state.tag)) &&
-      (ignoreBrowse || !state.goSoon || goSoonActive(p)),
+      (ignoreBrowse || matchesFilters(p)),
   );
+}
+
+/** What's narrowing the map (and, with a search, the list) beyond To try / Visited / All. */
+function filterLabels({ withSearch = false } = {}) {
+  return [
+    state.category,
+    state.city,
+    ...state.filters.map((f) => LIST_FILTERS[f]?.label ?? f),
+    state.openNow ? "open now" : "",
+    withSearch && state.search.trim() ? `"${state.search.trim()}"` : "",
+  ].filter(Boolean);
+}
+
+/** Back to everything in To try / Visited / All. */
+function clearAllFilters() {
+  state.category = "";
+  state.city = "";
+  state.filters = [];
+  state.openNow = false;
+  state.search = "";
+  const box = $("#search");
+  if (box) box.value = "";
+  fitted = false;
+}
+
+/** A Browse tile or a tag shows just what was picked, instead of adding to what was on before. */
+function startFresh() {
+  const openNow = state.openNow;
+  clearAllFilters();
+  state.openNow = openNow;
 }
 
 function savePrefs() {
@@ -474,12 +501,21 @@ function renderMap() {
       : `<strong>Your map is empty</strong><p>Share a reel to Reel Eats, or tap Add and paste a link.</p>`;
     card.hidden = false;
   } else if (!shown.length) {
-    card.innerHTML = state.openNow
-      ? `<strong>Nothing open right now</strong><p>No places in this view are open at the moment. Turn off Open now to see them all.</p>`
-      : `<strong>Nothing to show</strong><p>No places match these filters.</p>`;
+    const on = filterLabels();
+    card.innerHTML = on.length
+      ? `<strong>Nothing matches</strong><p>No places in ${esc(SCOPE_LABEL[state.status])} match all of: ${esc(on.join(", "))}.</p><div><button class="btn small" type="button" data-clear-all>Clear all filters</button></div>`
+      : `<strong>Nothing to show</strong><p>Switch between To try, Visited and All.</p>`;
     card.hidden = false;
   } else {
     card.hidden = true;
+  }
+  // The filters are set on the list and in Browse, so the map says which are on.
+  const bar = $("#map-filters");
+  const on = filterLabels();
+  // The card at the top (home not set yet, say) takes the same spot.
+  bar.hidden = !on.length || !shown.length || !card.hidden;
+  if (!bar.hidden) {
+    bar.innerHTML = `<span>${esc(on.join(" · "))} · <span class="num">${shown.length}</span></span><button type="button" class="link-btn" data-clear-all>Clear</button>`;
   }
 
   if (!fitted && (pts.length || state.home)) {
@@ -625,8 +661,10 @@ function inboxCard(s) {
 function activeFilters() {
   const chips = [];
   if (state.city) chips.push(`<button type="button" class="chip on" data-clear="city">📍 ${esc(state.city)} <span aria-hidden="true">✕</span></button>`);
-  if (state.tag) chips.push(`<button type="button" class="chip on" data-clear="tag">${TAG_EMOJI[state.tag] || ""} ${esc(state.tag)} <span aria-hidden="true">✕</span></button>`);
-  if (state.goSoon) chips.push(`<button type="button" class="chip on" data-clear="goSoon">⏳ Go soon <span aria-hidden="true">✕</span></button>`);
+  // Occasions picked in Browse that have no icon of their own on the list.
+  for (const f of state.filters.filter((x) => !LIST_FILTERS[x])) {
+    chips.push(`<button type="button" class="chip on" data-filter="${esc(f)}">${TAG_EMOJI[f] || ""} ${esc(f)} <span aria-hidden="true">✕</span></button>`);
+  }
   return chips.length ? `<div class="chip-row" aria-label="Active filters">${chips.join("")}</div>` : "";
 }
 
@@ -662,18 +700,15 @@ function renderList() {
   if (!state.places.length) {
     html += emptyState();
   } else {
-    const items = sortPlaces(visiblePlaces().filter((p) => matchesSearch(p, q) && matchesFilters(p)));
-    const label = SCOPE_LABEL[state.status];
-    const cat = state.category ? ` · ${state.category}` : "";
-    const open = state.openNow ? " · open now" : "";
-    const picked = state.filters.map((f) => ` · ${LIST_FILTERS[f]?.label ?? f}`).join("");
-    const clear = state.filters.length ? `<button type="button" class="link-btn" data-clear-filters>Clear</button>` : "";
-    html += `<div class="section-row"><div class="section-label">${esc(label + cat + open + picked)} · <span class="num">${items.length}</span></div>${clear}</div>`;
+    const items = sortPlaces(visiblePlaces().filter((p) => matchesSearch(p, q)));
+    const on = filterLabels({ withSearch: true });
+    const clear = on.length ? `<button type="button" class="link-btn" data-clear-all>Clear all</button>` : "";
+    html += `<div class="section-row"><div class="section-label">${esc([SCOPE_LABEL[state.status], ...on].join(" · "))} · <span class="num">${items.length}</span></div>${clear}</div>`;
     html += items.length
       ? `<div class="cards">${items.map(placeCard).join("")}</div>`
-      : state.filters.length
-        ? `<div class="empty"><h2>No matches</h2><p>Nothing here has all of those. Turn one off, or tap Clear.</p></div>`
-        : `<div class="empty"><h2>No matches</h2><p>${state.openNow ? "Nothing that matches is open right now. Turn off Open now, or" : "Try another search, or"} switch between To try, Visited and All.</p></div>`;
+      : on.length
+        ? `<div class="empty"><h2>No matches</h2><p>Nothing in ${esc(SCOPE_LABEL[state.status])} matches all of: ${esc(on.join(", "))}.</p><button class="btn" type="button" data-clear-all>Clear all filters</button></div>`
+        : `<div class="empty"><h2>No matches</h2><p>Switch between To try, Visited and All.</p></div>`;
   }
   const archived = state.places.filter(isArchived);
   if (archived.length && !state.guest) {
@@ -707,7 +742,8 @@ function tile({ attr, value, icon, name, list }) {
 
 function renderBrowse() {
   document.querySelectorAll("[data-browse]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.browse === state.browse)));
-  const places = visiblePlaces({ ignoreCategory: state.browse === "cats", ignoreBrowse: true });
+  // A tile shows just its group (see startFresh), so the counts ignore the other filters too.
+  const places = visiblePlaces({ ignoreCategory: true, ignoreBrowse: true });
   const label = SCOPE_LABEL[state.status];
   let tiles = [];
   let heading = "";
@@ -1641,7 +1677,7 @@ function bindUI() {
   // Delegated clicks for content that gets re-rendered.
   document.addEventListener("click", async (e) => {
     const t = e.target.closest(
-      "[data-open],[data-go],[data-filter],[data-clear-filters],[data-theme-mode],[data-theme-accent],[data-cat],[data-city],[data-tag],[data-go-soon],[data-clear],[data-dismiss],[data-units],[data-copy],[data-copy-token],[data-export],[data-banner-close],[data-revoke-member],[data-revoke-link],[data-share-url],[data-debug-share],[data-copy-debug],[data-archived-view],[data-archive-closed],#recheck-btn,#refresh-btn,#signout-btn,#paste-btn,[data-act]",
+      "[data-open],[data-go],[data-filter],[data-clear-all],[data-theme-mode],[data-theme-accent],[data-cat],[data-city],[data-tag],[data-go-soon],[data-clear],[data-dismiss],[data-units],[data-copy],[data-copy-token],[data-export],[data-banner-close],[data-revoke-member],[data-revoke-link],[data-share-url],[data-debug-share],[data-copy-debug],[data-archived-view],[data-archive-closed],#recheck-btn,#refresh-btn,#signout-btn,#paste-btn,[data-act]",
     );
     if (!t) return;
     if (t.dataset.open) return openPlace(t.dataset.open);
@@ -1650,26 +1686,24 @@ function bindUI() {
       return setView(t.dataset.go);
     }
     if (t.dataset.cat) {
+      startFresh();
       state.category = t.dataset.cat;
       return setView("list");
     }
     if (t.dataset.city !== undefined) {
+      startFresh();
       state.city = t.dataset.city;
-      state.tag = "";
-      state.goSoon = false;
       return setView("list");
     }
     if (t.dataset.tag) {
       closeSheet();
-      state.tag = t.dataset.tag;
-      state.city = "";
-      state.goSoon = false;
+      startFresh();
+      state.filters = [t.dataset.tag];
       return setView("list");
     }
     if (t.dataset.goSoon) {
-      state.goSoon = true;
-      state.tag = "";
-      state.city = "";
+      startFresh();
+      state.filters = ["go-soon"];
       return setView("list");
     }
     if (t.dataset.themeMode || t.dataset.themeAccent) {
@@ -1679,14 +1713,15 @@ function bindUI() {
     if (t.dataset.filter) {
       const f = t.dataset.filter;
       state.filters = state.filters.includes(f) ? state.filters.filter((x) => x !== f) : [...state.filters, f];
-      return renderList();
+      fitted = false;
+      return render();
     }
-    if (t.dataset.clearFilters !== undefined) {
-      state.filters = [];
-      return renderList();
+    if (t.dataset.clearAll !== undefined) {
+      clearAllFilters();
+      return render();
     }
     if (t.dataset.clear) {
-      state[t.dataset.clear] = t.dataset.clear === "goSoon" ? false : "";
+      state[t.dataset.clear] = "";
       fitted = false;
       return render();
     }
