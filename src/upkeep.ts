@@ -1,5 +1,6 @@
 import { getHome, getSetting, now, placesDueForRefresh, setSetting, updatePlace } from "./db";
 import { saveImageFromUrl } from "./media";
+import { MENU_RECHECK_MS, refreshMenu } from "./menu";
 import { PlacesError, placesClient } from "./places";
 import { fetchApifyUsage } from "./source";
 import type { ApifyUsage, Env, PlaceRow } from "./types";
@@ -11,11 +12,14 @@ export const REFRESH_AFTER_MS = 30 * 24 * 3600 * 1000;
 /** The free Workers plan allows 50 outside requests per run, so each run does a slice. */
 const PLACES_PER_RUN = 35;
 const PHOTOS_PER_RUN = 8;
+// Last in the run, so a site that redirects a lot can only use up what's left.
+const MENUS_PER_RUN = 4;
 
 export interface UpkeepReport {
   checked: number;
   closed: string[];
   photos: number;
+  menus: number;
   apify: ApifyUsage | null;
 }
 
@@ -44,6 +48,7 @@ export async function refreshPlaces(env: Env, limit = PLACES_PER_RUN, olderThan 
         rating: c.rating ?? p.rating,
         rating_count: c.ratingCount ?? p.rating_count,
         price_level: c.priceLevel || p.price_level,
+        price_range: c.priceRange || p.price_range,
         hours: c.hours ? JSON.stringify(c.hours) : null,
         time_zone: c.timeZone || p.time_zone,
         utc_offset: c.utcOffset ?? p.utc_offset,
@@ -96,6 +101,31 @@ export async function backfillPhotos(env: Env, limit = PHOTOS_PER_RUN): Promise<
   return saved;
 }
 
+/**
+ * Look for menu links on restaurants' websites: places never searched, whose website
+ * changed, or last searched a month ago. Places are also searched when opened in the app.
+ */
+export async function backfillMenus(env: Env, limit = MENUS_PER_RUN): Promise<number> {
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM places WHERE archived_at IS NULL AND website IS NOT NULL AND website != ''
+       AND (menu_checked_for IS NULL OR menu_checked_for != website OR coalesce(menu_checked_at, 0) < ?)
+     ORDER BY coalesce(menu_checked_at, 0), created_at LIMIT ?`,
+  )
+    .bind(now() - MENU_RECHECK_MS, limit)
+    .all<PlaceRow>();
+  let searched = 0;
+  for (const p of results) {
+    try {
+      await refreshMenu(env, p);
+      searched++;
+    } catch (err) {
+      console.warn("Out of outside requests for menu links; the next run continues", err);
+      break;
+    }
+  }
+  return searched;
+}
+
 /** Check this month's Apify credit and keep the result for the app. */
 export async function checkApifyUsage(env: Env): Promise<ApifyUsage | null> {
   const usage = await fetchApifyUsage(env);
@@ -112,5 +142,6 @@ export async function runDailyUpkeep(env: Env): Promise<UpkeepReport> {
   const apify = await checkApifyUsage(env);
   const photos = await backfillPhotos(env);
   const { checked, closed } = await refreshPlaces(env);
-  return { checked, closed, photos, apify };
+  const menus = await backfillMenus(env);
+  return { checked, closed, photos, menus, apify };
 }

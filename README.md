@@ -7,9 +7,9 @@ It runs on free tiers. You don't need a Claude or OpenAI key.
 The phone app has four views:
 
 - **Map**: every saved place as a pin, colored by whether you've been, with your home marked. A button shows where you are now.
-- **List**: each place with the reel's cover image, open or closed right now, and how far it is. Sort by distance from home, distance from where you are, newest, or name. Search matches names, dishes, cities, tags and notes.
+- **List**: each place with the reel's cover image, open or closed right now, how far it is, and Google's price range. Sort by distance from home, distance from where you are, newest, or name. Search matches names, dishes, cities, tags and notes. A row of filter icons (Go soon, Date night, Coffee, Cocktails, Brunch, Outdoor, Late night, Under $20) narrows the list; pick several to see places that have them all.
 - **Browse**: tiles by category (Pizza, Coffee & Cafe), by city, or by occasion (date night, outdoor seating, and "Go soon" for new openings and pop-ups). Tap one to filter the list.
-- **Settings**: home address, sharing setup, partner codes, read-only links, Apify credit, and exports to CSV, JSON or Google My Maps.
+- **Settings**: home address, a color theme (Berry, Ocean, Teal, Grape, Espresso or Slate, light, dark or matching the phone, kept on each phone), sharing setup, partner codes, read-only links, Apify credit, and exports to CSV, JSON or Google My Maps.
 
 **Open now** at the top filters every view to places open at this moment, in each place's own time zone. Together with the location button or "Nearest me", that's "what's open near me".
 
@@ -17,7 +17,9 @@ Each place opens a detail card:
 
 - every reel that recommended it, with the creator and date ("Recommended by 3 creators")
 - Google Maps, Apple Maps, the restaurant's Instagram account and website
-- today's hours and the full week, Google's rating and price level, and the phone number
+- **Menu**: a link to the menu, found on the restaurant's own website. Where the site has none, **Menu on Google Maps** opens the place in Google Maps, whose Menu tab has the menu photos people post
+- today's hours and the full week, Google's rating, price level and price range per person, and the phone number
+- Google's **Review summary** of what people say, and what Google lists the place as having (outdoor seating, live music, good for groups and so on)
 - occasion tags and a "go soon" note when the reel says it just opened, is a pop-up, or has something for a limited time
 - links to book a table on OpenTable or Resy
 
@@ -66,7 +68,11 @@ When nothing in the reel leads to a restaurant, the share waits in the app under
 
 **Why Apify helps.** Instagram often refuses requests from cloud servers. When that happens, Reel Eats only has the link, so it asks you for the name. Apify fetches the caption, location tag, tagged accounts and transcript reliably. The app warns you when 80% of the month's Apify credit is used, and again if it runs out.
 
-**Google allowance.** Opening hours come from the same Google Places price tier as the rating and phone number Reel Eats already uses, so they add no cost of their own. The daily job re-checks each place about once a month, which uses one Place Details request per place.
+**Google allowance.** Opening hours and the price range come from the same Google Places price tier as the rating and phone number Reel Eats already uses, so they add no cost of their own. The daily job re-checks each place about once a month, which uses one Place Details request per place.
+
+**Review summaries.** The review summary and Google's list of features are in Google's Atmosphere tier (Place Details Enterprise + Atmosphere: 1,000 free a month, then $25 per 1,000). Google's terms don't allow storing them, so they're fetched each time a place is opened, once per visit to the app. `GOOGLE_EXTRAS_PER_DAY` (default 30) caps them a day, which keeps a month inside the free 1,000; past the cap, places open without them until the next day. Google's rules also require the "Review summary" heading, its "Summarized with Gemini" note, and the See reviews, About this summary and Report summary links, which the app shows.
+
+**Menu links** come from each restaurant's website, not from Google, so they cost nothing. A site is searched the first time its place is opened and by the daily job, then again after a month. The Google Places API only hands out 10 photos per place and doesn't say which are menus; in a test of 14 places none of the 135 photos was one, so the app doesn't use them.
 
 **Workers AI allowance.** Cloudflare includes 10,000 Workers AI "neurons" a day for free. With the default Llama 3.3 70B model, one reel with its transcript uses about 25 to 55, so the free allowance covers well over 100 reels a day.
 
@@ -181,6 +187,7 @@ These live under `vars` in `wrangler.jsonc`. Redeploy after editing.
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `AI_MODEL` | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | Workers AI model that reads captions. Set it to `off` to use only pins, tags and mentions. |
+| `GOOGLE_EXTRAS_PER_DAY` | `30` | Most Google review summaries fetched a day. `0` turns them off. |
 | `APIFY_POST_ACTOR` | `data-slayer~instagram-post-details` | Main Apify reader. Set it to `off` to use only the fallback. |
 | `APIFY_ACTOR` | `apify~instagram-scraper` | Fallback reader when the main one fails. `apify~instagram-reel-scraper` also works. |
 | `APIFY_TRANSCRIPT_ACTOR` | `apple_yang~instagram-transcripts-scraper` | Reads what's said in the video. |
@@ -204,7 +211,7 @@ With Claude Opus 5, requests opt into Anthropic's server-side fallback, `fallbac
 
 - **Captions that never name the place.** Without Claude, Reel Eats relies on what the post points at: pins, the location tag, tagged accounts and mentions, plus Workers AI's reading of the caption. A reel that only says "best tacos ever" needs you to type the name.
 - **Private accounts and stories** can't be read.
-- **Where your data goes.** The list and your home address are stored in your own Cloudflare D1 database. Reel links go to Apify if you set a token, including to the two third-party actors named above. Captions and transcripts go to Cloudflare Workers AI, which runs on Cloudflare's network under your account. Restaurant names, your home location and the reel's location go to Google Places. Nothing goes to Anthropic unless you add a Claude key.
+- **Where your data goes.** The list and your home address are stored in your own Cloudflare D1 database. Reel links go to Apify if you set a token, including to the two third-party actors named above. Captions and transcripts go to Cloudflare Workers AI, which runs on Cloudflare's network under your account. Restaurant names, your home location and the reel's location go to Google Places. The Worker also opens each restaurant's own website to look for a menu link. Nothing goes to Anthropic unless you add a Claude key.
 - **Access.** Anyone with the owner's access code can read and change your list and its settings. Rotate it with `npx wrangler secret put APP_TOKEN`, then enter the new code on your phone and in the Shortcut. Partner codes can read and change places but not settings; only a hash of each is stored, so a lost code can't be shown again. Make a new one instead.
 - **Read-only links** are long random addresses. Anyone who has one can see that list until you turn it off. Cover images are served at unguessable addresses without a code, so shared lists can show them.
 - **Workers free plan.** The free plan limits CPU time per request. If saves fail with a "CPU time limit" error in the Cloudflare dashboard, the Workers Paid plan raises that limit.
@@ -221,7 +228,7 @@ npm run typecheck
 
 ### Testing without real API keys
 
-`test/e2e/mock-upstreams.mjs` stands in for the three Apify actors, Google Places, Claude and a web page. `test/e2e/smoke.mjs` runs the whole API against `wrangler dev`. It covers mentions, location tags, pins, chains, list reels, duplicates, a second creator's reel, the fallback reader, transcripts, tags, hours, cover images, retries, typed names, branch switching, moving house, partner codes, read-only links and the monthly re-check. `test/e2e/wrangler.e2e.jsonc` is the same Worker without the Workers AI binding, because that binding always needs a Cloudflare login.
+`test/e2e/mock-upstreams.mjs` stands in for the three Apify actors, Google Places, Claude and a web page. `test/e2e/smoke.mjs` runs the whole API against `wrangler dev`. It covers mentions, location tags, pins, chains, list reels, duplicates, a second creator's reel, the fallback reader, transcripts, tags, hours, cover images, retries, typed names, branch switching, moving house, partner codes, read-only links, the monthly re-check, price ranges, review summaries and their daily cap, and menu links. `test/e2e/wrangler.e2e.jsonc` is the same Worker without the Workers AI binding, because that binding always needs a Cloudflare login.
 
 ```sh
 node test/e2e/mock-upstreams.mjs 8799 &
@@ -242,7 +249,8 @@ To run the scheduled jobs locally, open `http://localhost:8787/cdn-cgi/handler/s
 | --- | --- |
 | `src/index.ts` | API routes, access codes, read-only links and the scheduled jobs |
 | `src/pipeline.ts` | Processing a share from start to finish |
-| `src/upkeep.ts` | The daily job: Google re-checks, cover-image backfill, Apify credit |
+| `src/upkeep.ts` | The daily job: Google re-checks, cover-image backfill, menu links, Apify credit |
+| `src/menu.ts` | Finding the menu link on a restaurant's website |
 | `src/source.ts` | Reading reels through Apify, Instagram's public page, TikTok and other links |
 | `src/tags.ts` | Occasion tags and "go soon" notes found in captions and transcripts |
 | `src/media.ts` | Keeping copies of reel cover images |

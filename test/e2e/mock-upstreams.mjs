@@ -17,6 +17,7 @@ const P = (id, name, lat, lng, extra = {}) => ({
   rating: extra.rating ?? 4.5,
   userRatingCount: extra.count ?? 1200,
   priceLevel: extra.price || "PRICE_LEVEL_MODERATE",
+  ...(extra.range ? { priceRange: { startPrice: { currencyCode: "USD", units: String(extra.range[0]) }, endPrice: { currencyCode: "USD", units: String(extra.range[1]) } } } : {}),
   businessStatus: "OPERATIONAL",
   primaryType: extra.type || "restaurant",
   primaryTypeDisplayName: { text: extra.typeLabel || "Restaurant" },
@@ -38,13 +39,13 @@ const DAILY = {
 
 const PLACES = {
   home: P("home", "350 5th Ave", 40.7484, -73.9857, { address: "350 5th Ave, New York, NY 10118, USA", type: "street_address", typeLabel: "Address" }),
-  tdn: P("tdn", "Tacos Del Norte", 40.7466, -73.8913, { address: "84-12 Roosevelt Ave, Queens, NY 11372", city: "Queens", price: "PRICE_LEVEL_INEXPENSIVE", type: "mexican_restaurant", typeLabel: "Mexican Restaurant", hours: DAILY }),
+  tdn: P("tdn", "Tacos Del Norte", 40.7466, -73.8913, { address: "84-12 Roosevelt Ave, Queens, NY 11372", city: "Queens", price: "PRICE_LEVEL_INEXPENSIVE", range: [10, 20], website: `http://127.0.0.1:${port}/site/tdn`, type: "mexican_restaurant", typeLabel: "Mexican Restaurant", hours: DAILY }),
   ss_msp: P("ss_msp", "Shake Shack Madison Square Park", 40.7414, -73.9882, { website: "https://shakeshack.com/location/madison-square-park", address: "Madison Ave & E 23rd St, New York, NY 10010", type: "hamburger_restaurant", typeLabel: "Hamburger Restaurant" }),
   ss_hs: P("ss_hs", "Shake Shack Herald Square", 40.7503, -73.988, { website: "https://shakeshack.com/location/herald-square", address: "1333 Broadway, New York, NY 10018", type: "hamburger_restaurant", typeLabel: "Hamburger Restaurant" }),
   ss_gc: P("ss_gc", "Shake Shack Grand Central", 40.7527, -73.9772, { website: "https://shakeshack.com/location/grand-central", address: "87 E 42nd St, New York, NY 10017", type: "hamburger_restaurant", typeLabel: "Hamburger Restaurant" }),
   joes: P("joes", "Joe's Pizza Broadway", 40.7547, -73.987, { address: "1435 Broadway, New York, NY 10018", price: "PRICE_LEVEL_INEXPENSIVE", rating: 4.6, count: 21000, type: "pizza_restaurant", typeLabel: "Pizza Restaurant" }),
   lind: P("lind", "L'industrie Pizzeria", 40.7115, -73.958, { address: "254 S 2nd St, Brooklyn, NY 11211", city: "Brooklyn", rating: 4.7, type: "pizza_restaurant", typeLabel: "Pizza Restaurant" }),
-  lucali: P("lucali", "Lucali", 40.6806, -74.0005, { address: "575 Henry St, Brooklyn, NY 11231", city: "Brooklyn", rating: 4.6, price: "PRICE_LEVEL_EXPENSIVE", type: "pizza_restaurant", typeLabel: "Pizza Restaurant" }),
+  lucali: P("lucali", "Lucali", 40.6806, -74.0005, { address: "575 Henry St, Brooklyn, NY 11231", city: "Brooklyn", rating: 4.6, price: "PRICE_LEVEL_EXPENSIVE", range: [30, 60], website: `http://127.0.0.1:${port}/site/lucali`, type: "pizza_restaurant", typeLabel: "Pizza Restaurant" }),
   abs: P("abs", "Absolute Bagels", 40.8024, -73.9674, { address: "2788 Broadway, New York, NY 10025", type: "bagel_shop", typeLabel: "Bagel Shop", price: "PRICE_LEVEL_INEXPENSIVE" }),
   tsujita: P("tsujita", "Tsujita LA Artisan Noodle", 34.0395, -118.4428, { address: "2057 Sawtelle Blvd, Los Angeles, CA 90025", city: "Los Angeles", type: "ramen_restaurant", typeLabel: "Ramen Restaurant" }),
   // Rosetta Bakery branch coordinates are made up; the reel caption is a real Apify result.
@@ -303,6 +304,18 @@ const server = createServer(async (req, res) => {
     return res.end(png);
   }
 
+  // Restaurant websites, for menu links.
+  if (req.method === "GET" && url.pathname.startsWith("/site/")) {
+    const site = url.pathname.split("/")[2];
+    calls[`site ${site}`] = (calls[`site ${site}`] || 0) + 1;
+    const pages = {
+      tdn: '<html><body><nav><a href="/site/tdn">Home</a> <a href="/site/tdn/menu"><span>Our Menu</span></a> <a href="https://www.instagram.com/tacosdelnorte/">Instagram</a></nav></body></html>',
+      lucali: '<html><body><nav><a href="/site/lucali">Home</a> <a href="/site/lucali/about">About</a> <a href="#" class="menu-toggle">Menu</a></nav></body></html>',
+    };
+    res.writeHead(pages[site] ? 200 : 404, { "Content-Type": "text/html" });
+    return res.end(pages[site] || "not found");
+  }
+
   if (req.method === "GET" && url.pathname === "/blog/ramen") {
     res.writeHead(200, { "Content-Type": "text/html" });
     return res.end(
@@ -322,6 +335,23 @@ const server = createServer(async (req, res) => {
   if (req.method === "GET" && detail) {
     const p = PLACES[detail[1]];
     if (!p) return send(res, 404, { error: { message: "Not found" } });
+    // The review summary and features, asked for when a place is opened in the app.
+    if (String(req.headers["x-goog-fieldmask"] || "").includes("reviewSummary")) {
+      calls[`google extras ${p.id}`] = (calls[`google extras ${p.id}`] || 0) + 1;
+      if (p.id !== "lucali") return send(res, 200, { takeout: true });
+      return send(res, 200, {
+        reviewSummary: {
+          text: { text: "People say the pizza and calzone are worth the wait, and mention the candlelit room." },
+          disclosureText: { text: "Summarized with Gemini" },
+          flagContentUri: "https://www.google.com/local/review/rap/report?lucali",
+          reviewsUri: "https://www.google.com/maps/place/?q=place_id:lucali&reviews",
+        },
+        outdoorSeating: true,
+        goodForGroups: true,
+        liveMusic: false,
+        takeout: true,
+      });
+    }
     return send(res, 200, CLOSED_SINCE.has(p.id) ? { ...p, businessStatus: "CLOSED_PERMANENTLY" } : p);
   }
 

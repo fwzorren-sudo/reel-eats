@@ -4,6 +4,8 @@ export interface Env {
   /** Cloudflare Workers AI. Included with every Cloudflare account; no key needed. */
   AI?: Ai;
   GOOGLE_MAPS_API_KEY: string;
+  /** Most Google review summaries fetched a day, to stay inside Google's free monthly amount. Default 30. */
+  GOOGLE_EXTRAS_PER_DAY?: string;
   APP_TOKEN: string;
   /** Optional. Reads reels through Apify, which Instagram blocks far less often. */
   APIFY_TOKEN?: string;
@@ -163,6 +165,8 @@ export interface PlaceCandidate {
   hours: OpeningHours | null;
   timeZone: string;
   utcOffset: number | null;
+  /** Google's price range per person, such as "$20–30"; empty when Google has none. */
+  priceRange: string;
 }
 
 export interface SourceMeta {
@@ -276,6 +280,11 @@ export interface PlaceRow {
   archive_reason: ArchiveReason | null;
   /** 1 when the saved branch stays put instead of switching to the one nearest home. */
   keep_branch: number;
+  price_range: string | null;
+  menu_url: string | null;
+  /** The website that was searched for a menu link, and when. */
+  menu_checked_for: string | null;
+  menu_checked_at: number | null;
 }
 
 export const ARCHIVE_REASONS = ["not-for-me", "closed", "too-far", "other"] as const;

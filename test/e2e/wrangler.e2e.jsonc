@@ -19,5 +19,7 @@
       "migrations_dir": "../../migrations"
     }
   ],
-  "triggers": { "crons": ["* * * * *", "17 8 * * *"] }
+  "triggers": { "crons": ["* * * * *", "17 8 * * *"] },
+  // Low, so the smoke test can see the daily cap on review summaries.
+  "vars": { "GOOGLE_EXTRAS_PER_DAY": "3" }
 }

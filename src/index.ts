@@ -29,11 +29,12 @@ import {
 import { distanceMeters } from "./geo";
 import { isSupportedImageType } from "./extract";
 import { engineFor, placesClient, processShare, recheckPlace, rereadShare, summarize } from "./pipeline";
-import { geocodeHome, PlacesError } from "./places";
+import { geocodeHome, PlacesError, type PlaceExtras } from "./places";
 import { canonicalUrl, extractFirstUrl } from "./source";
 import { cleanTags } from "./tags";
 import { errorText, mergeAttempt, runTraced, Trace } from "./trace";
-import { backfillPhotos, checkApifyUsage, DAILY_CRON, refreshPlaces, runDailyUpkeep } from "./upkeep";
+import { backfillMenus, backfillPhotos, checkApifyUsage, DAILY_CRON, refreshPlaces, runDailyUpkeep } from "./upkeep";
+import { menuDue, refreshMenu } from "./menu";
 import {
   ARCHIVE_REASONS,
   CATEGORIES,
@@ -91,6 +92,28 @@ async function sha256(s: string): Promise<Uint8Array> {
 }
 
 const hex = (bytes: Uint8Array) => [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+type GoogleExtras = PlaceExtras & { limited?: boolean; error?: string };
+
+/**
+ * Review summaries are billed per request, with 1,000 free a month. A daily cap
+ * (GOOGLE_EXTRAS_PER_DAY, default 30) keeps a busy month inside that.
+ */
+async function googleExtras(env: Env, placeId: string): Promise<GoogleExtras> {
+  const n = Number.parseInt(env.GOOGLE_EXTRAS_PER_DAY ?? "", 10);
+  const limit = Number.isFinite(n) ? n : 30;
+  const day = new Date().toISOString().slice(0, 10);
+  const used = await getSetting<{ day: string; count: number }>(env.DB, "google_extras");
+  const count = used?.day === day ? used.count : 0;
+  if (count >= limit) return { summary: null, features: [], limited: true };
+  await setSetting(env.DB, "google_extras", { day, count: count + 1 });
+  try {
+    return await placesClient(env).extras(placeId);
+  } catch (err) {
+    console.warn("Google review summary failed", err);
+    return { summary: null, features: [], error: err instanceof Error ? err.message : String(err) };
+  }
+}
 
 /** The owner signs in with APP_TOKEN. A partner signs in with a code the owner made in Settings. */
 async function checkAuth(req: Request, env: Env): Promise<Viewer> {
@@ -381,6 +404,8 @@ function publicPlace(p: PlaceRow) {
     rating: p.rating,
     rating_count: p.rating_count,
     price_level: p.price_level,
+    price_range: p.price_range,
+    menu_url: p.menu_checked_for === p.website ? p.menu_url : null,
     business_status: p.business_status,
     branch_count: p.branch_count,
     visit_status: p.visit_status,
@@ -577,6 +602,17 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
     return json({ place: await updatePlace(db, place.id, fields) });
   }
 
+  // Opening a place: Google's review summary and features (fetched each time, never stored),
+  // and the menu link, looked for on the restaurant's website the first time.
+  if ((m = path.match(/^\/api\/places\/([\w-]+)\/google$/)) && method === "GET") {
+    const place = await getPlace(db, m[1]);
+    if (!place) throw new HttpError(404, "Place not found.");
+    const menu = menuDue(place) ? refreshMenu(env, place).catch(() => place) : Promise.resolve(place);
+    const extras: Promise<GoogleExtras> = place.google_place_id ? googleExtras(env, place.google_place_id) : Promise.resolve({ summary: null, features: [] });
+    const [withMenu, got] = await Promise.all([menu, extras]);
+    return json({ ...got, menu_url: withMenu.menu_url, menu_checked_for: withMenu.menu_checked_for });
+  }
+
   if (path === "/api/search" && method === "GET") {
     const q = url.searchParams.get("q")?.trim();
     if (!q) throw new HttpError(400, "Type something to search for.");
@@ -647,7 +683,8 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
     const apify = await checkApifyUsage(env);
     const photos = await backfillPhotos(env);
     const { checked, closed } = await refreshPlaces(env, 35, body.all ? now() : undefined);
-    return json({ checked, closed, photos, apify });
+    const menus = await backfillMenus(env, body.all ? 10 : undefined);
+    return json({ checked, closed, photos, menus, apify });
   }
 
   throw new HttpError(404, "Not found.");

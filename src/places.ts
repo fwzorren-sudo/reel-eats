@@ -13,6 +13,8 @@ const FIELDS = [
   "rating",
   "userRatingCount",
   "priceLevel",
+  // Same price tier as priceLevel, so it costs nothing extra.
+  "priceRange",
   "businessStatus",
   "primaryTypeDisplayName",
   "primaryType",
@@ -31,6 +33,55 @@ const PRICE: Record<string, string> = {
   PRICE_LEVEL_VERY_EXPENSIVE: "$$$$",
 };
 
+const CURRENCY: Record<string, string> = { USD: "$", CAD: "CA$", AUD: "A$", NZD: "NZ$", MXN: "MX$", EUR: "€", GBP: "£", JPY: "¥" };
+
+interface Money {
+  currencyCode?: string;
+  units?: string;
+}
+
+/** "$20–30" from Google's price range per person, "$100+" when it has no top end. */
+export function formatPriceRange(range: { startPrice?: Money; endPrice?: Money } | undefined): string {
+  const start = range?.startPrice?.units;
+  const end = range?.endPrice?.units;
+  if (!start && !end) return "";
+  const code = range?.startPrice?.currencyCode ?? range?.endPrice?.currencyCode ?? "USD";
+  const sign = CURRENCY[code] ?? `${code} `;
+  if (start && end) return `${sign}${start}–${end}`;
+  return start ? `${sign}${start}+` : `Up to ${sign}${end}`;
+}
+
+/**
+ * Google's yes/no features worth showing, in this order. Asked for only when a place is opened:
+ * they, and the review summary, are in Google's pricier Atmosphere tier.
+ */
+const FEATURES: [string, string][] = [
+  ["outdoorSeating", "Outdoor seating"],
+  ["liveMusic", "Live music"],
+  ["goodForGroups", "Good for groups"],
+  ["goodForChildren", "Good for kids"],
+  ["allowsDogs", "Dogs allowed"],
+  ["servesVegetarianFood", "Vegetarian options"],
+  ["servesCocktails", "Cocktails"],
+  ["servesBrunch", "Brunch"],
+  ["reservable", "Takes reservations"],
+  ["takeout", "Takeout"],
+  ["delivery", "Delivery"],
+];
+
+export interface ReviewSummary {
+  text: string;
+  /** "Summarized with Gemini", in the reader's language. Shown under the summary, unchanged. */
+  disclosure: string;
+  flagUri: string;
+  reviewsUri: string;
+}
+
+export interface PlaceExtras {
+  summary: ReviewSummary | null;
+  features: string[];
+}
+
 /** Google's bias circle can't be larger than 50 km. */
 const BIAS_RADIUS_M = 50000;
 
@@ -45,6 +96,7 @@ interface RawPlace {
   rating?: number;
   userRatingCount?: number;
   priceLevel?: string;
+  priceRange?: { startPrice?: Money; endPrice?: Money };
   businessStatus?: string;
   primaryTypeDisplayName?: { text?: string };
   primaryType?: string;
@@ -124,6 +176,31 @@ export class PlacesClient {
     return (json.places ?? []).filter((p) => p.location).map((p) => toCandidate(p, opts.home ?? null));
   }
 
+  /** Google's review summary and features for a place. Never stored: Google's terms don't allow keeping them. */
+  async extras(placeId: string): Promise<PlaceExtras> {
+    const mask = ["reviewSummary", "googleMapsLinks", ...FEATURES.map(([f]) => f)].join(",");
+    const json = (await this.call(`/v1/places/${encodeURIComponent(placeId)}`, { method: "GET" }, mask, `${placeId} (review summary)`)) as Record<
+      string,
+      unknown
+    > & {
+      reviewSummary?: { text?: { text?: string }; disclosureText?: { text?: string }; flagContentUri?: string; reviewsUri?: string };
+      googleMapsLinks?: { reviewsUri?: string };
+    };
+    const r = json.reviewSummary;
+    const text = r?.text?.text?.trim() ?? "";
+    return {
+      summary: text
+        ? {
+            text,
+            disclosure: r?.disclosureText?.text?.trim() || "Summarized with Gemini",
+            flagUri: r?.flagContentUri ?? "",
+            reviewsUri: r?.reviewsUri || json.googleMapsLinks?.reviewsUri || "",
+          }
+        : null,
+      features: FEATURES.filter(([f]) => json[f] === true).map(([, label]) => label),
+    };
+  }
+
   async details(placeId: string, home: GeoPoint | null): Promise<PlaceCandidate | null> {
     const json = (await this.call(`/v1/places/${encodeURIComponent(placeId)}`, { method: "GET" }, FIELDS.join(","), placeId)) as RawPlace;
     return json.location ? toCandidate(json, home) : null;
@@ -164,6 +241,7 @@ export function toCandidate(p: RawPlace, home: GeoPoint | null): PlaceCandidate 
       : null,
     timeZone: p.timeZone?.id ?? "",
     utcOffset: p.utcOffsetMinutes ?? null,
+    priceRange: formatPriceRange(p.priceRange),
   };
 }
 

@@ -126,6 +126,7 @@ export function candidateFields(c: PlaceCandidate): Partial<PlaceRow> {
     rating: c.rating,
     rating_count: c.ratingCount,
     price_level: c.priceLevel,
+    price_range: c.priceRange || null,
     business_status: c.businessStatus,
   };
 }

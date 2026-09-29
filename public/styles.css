@@ -78,6 +78,176 @@
   color-scheme: dark;
 }
 
+/* Color themes, picked in Settings and kept on each device. Berry, above, is the default.
+   Each also has a dark version, used when the phone is in dark mode or Dark is picked. */
+:root[data-accent="ocean"] {
+  --bg: #f3f6f9;
+  --surface: #ffffff;
+  --surface-2: #e8eef4;
+  --line: #d9e2eb;
+  --text: #17212b;
+  --muted: #5b6875;
+  --accent: #1f63ad;
+  --accent-ink: #ffffff;
+  --accent-soft: #dde9f7;
+}
+:root[data-accent="teal"] {
+  --bg: #f2f7f6;
+  --surface: #ffffff;
+  --surface-2: #e5f0ee;
+  --line: #d5e4e1;
+  --text: #14231f;
+  --muted: #566a66;
+  --accent: #0b6b65;
+  --accent-ink: #ffffff;
+  --accent-soft: #d7efec;
+}
+:root[data-accent="grape"] {
+  --bg: #f6f4f9;
+  --surface: #ffffff;
+  --surface-2: #ede8f4;
+  --line: #e0d9ea;
+  --text: #1f1a2a;
+  --muted: #655d73;
+  --accent: #6a3fc0;
+  --accent-ink: #ffffff;
+  --accent-soft: #ebe3fa;
+}
+:root[data-accent="espresso"] {
+  --bg: #f8f5f1;
+  --surface: #ffffff;
+  --surface-2: #f0e9e1;
+  --line: #e5dbd0;
+  --text: #251c15;
+  --muted: #6b5f55;
+  --accent: #8b5130;
+  --accent-ink: #ffffff;
+  --accent-soft: #f3e4d8;
+}
+:root[data-accent="slate"] {
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #eaecf0;
+  --line: #dcdfe5;
+  --text: #1b1f26;
+  --muted: #5f6673;
+  --accent: #3d4f66;
+  --accent-ink: #ffffff;
+  --accent-soft: #e1e7ef;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-accent="ocean"]:not([data-theme="light"]) {
+    --bg: #0f1419;
+    --surface: #182029;
+    --surface-2: #212b36;
+    --line: #313d4a;
+    --text: #eaf0f6;
+    --muted: #9eacba;
+    --accent: #6aa9ec;
+    --accent-ink: #0b1722;
+    --accent-soft: #1d3350;
+  }
+  :root[data-accent="teal"]:not([data-theme="light"]) {
+    --bg: #0e1514;
+    --surface: #172120;
+    --surface-2: #1f2c2a;
+    --line: #2f3f3c;
+    --text: #e8f2f0;
+    --muted: #9aaeaa;
+    --accent: #4cc2b8;
+    --accent-ink: #08201d;
+    --accent-soft: #173a37;
+  }
+  :root[data-accent="grape"]:not([data-theme="light"]) {
+    --bg: #13111a;
+    --surface: #1c1925;
+    --surface-2: #262130;
+    --line: #362f43;
+    --text: #efebf6;
+    --muted: #aba3ba;
+    --accent: #a888f2;
+    --accent-ink: #170f2a;
+    --accent-soft: #2f2448;
+  }
+  :root[data-accent="espresso"]:not([data-theme="light"]) {
+    --bg: #15110e;
+    --surface: #1f1a16;
+    --surface-2: #2a231e;
+    --line: #3b312a;
+    --text: #f4ede7;
+    --muted: #b1a296;
+    --accent: #d99a6c;
+    --accent-ink: #22140a;
+    --accent-soft: #3d2a1d;
+  }
+  :root[data-accent="slate"]:not([data-theme="light"]) {
+    --bg: #111317;
+    --surface: #1a1d22;
+    --surface-2: #23272e;
+    --line: #333841;
+    --text: #eceef2;
+    --muted: #a4aab5;
+    --accent: #9db4d0;
+    --accent-ink: #111a26;
+    --accent-soft: #28323f;
+  }
+}
+:root[data-accent="ocean"][data-theme="dark"] {
+  --bg: #0f1419;
+  --surface: #182029;
+  --surface-2: #212b36;
+  --line: #313d4a;
+  --text: #eaf0f6;
+  --muted: #9eacba;
+  --accent: #6aa9ec;
+  --accent-ink: #0b1722;
+  --accent-soft: #1d3350;
+}
+:root[data-accent="teal"][data-theme="dark"] {
+  --bg: #0e1514;
+  --surface: #172120;
+  --surface-2: #1f2c2a;
+  --line: #2f3f3c;
+  --text: #e8f2f0;
+  --muted: #9aaeaa;
+  --accent: #4cc2b8;
+  --accent-ink: #08201d;
+  --accent-soft: #173a37;
+}
+:root[data-accent="grape"][data-theme="dark"] {
+  --bg: #13111a;
+  --surface: #1c1925;
+  --surface-2: #262130;
+  --line: #362f43;
+  --text: #efebf6;
+  --muted: #aba3ba;
+  --accent: #a888f2;
+  --accent-ink: #170f2a;
+  --accent-soft: #2f2448;
+}
+:root[data-accent="espresso"][data-theme="dark"] {
+  --bg: #15110e;
+  --surface: #1f1a16;
+  --surface-2: #2a231e;
+  --line: #3b312a;
+  --text: #f4ede7;
+  --muted: #b1a296;
+  --accent: #d99a6c;
+  --accent-ink: #22140a;
+  --accent-soft: #3d2a1d;
+}
+:root[data-accent="slate"][data-theme="dark"] {
+  --bg: #111317;
+  --surface: #1a1d22;
+  --surface-2: #23272e;
+  --line: #333841;
+  --text: #eceef2;
+  --muted: #a4aab5;
+  --accent: #9db4d0;
+  --accent-ink: #111a26;
+  --accent-soft: #28323f;
+}
+
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body {
@@ -317,7 +487,34 @@ main { position: relative; flex: 1; min-height: 0; }
 .leaflet-bar a { background: var(--surface); color: var(--text); border-color: var(--line); }
 
 /* ---------- List ---------- */
-.list-tools { display: flex; gap: 8px; margin-bottom: 14px; }
+.list-tools { display: flex; gap: 8px; margin-bottom: 12px; }
+.icon-filters { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; margin: 0 -16px 14px; padding: 2px 16px 4px; }
+.icon-filters::-webkit-scrollbar { display: none; }
+.icon-filters[hidden] { display: none; }
+.icon-filter {
+  flex: none;
+  width: 66px;
+  min-height: 60px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 4px;
+  padding: 6px 2px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+.icon-filter svg { width: 22px; height: 22px; }
+.icon-filter[aria-pressed="true"] { background: var(--basil-soft); border-color: color-mix(in srgb, var(--basil) 45%, var(--line)); color: var(--basil); }
+.section-row { display: flex; align-items: baseline; gap: 8px; margin: 18px 2px 8px; }
+.section-row:first-child { margin-top: 0; }
+.section-row .section-label { margin: 0; }
+.link-btn { margin-left: auto; border: 0; background: none; padding: 4px 6px; min-height: 28px; color: var(--accent); font-weight: 700; font-size: 13px; }
+.place-card .price { font-weight: 700; color: var(--text); opacity: 0.8; }
 .search {
   flex: 1;
   min-width: 0;
@@ -631,6 +828,18 @@ input[type="file"]::file-selector-button {
 .summary { margin: 0; font-size: 15px; }
 .dishes { display: flex; flex-wrap: wrap; gap: 6px; }
 .dish { padding: 4px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 13px; font-weight: 600; }
+.review-summary { display: grid; gap: 8px; padding: 12px 14px; border-radius: var(--radius); background: var(--surface-2); }
+.review-summary[hidden], .google-lists[hidden] { display: none; }
+.review-summary h3 { margin: 0; font-size: 15px; font-weight: 700; }
+.review-summary p { margin: 0; font-size: 14px; line-height: 1.45; }
+.review-summary .disclosure { color: var(--muted); font-size: 12px; }
+.summary-links { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; font-weight: 600; }
+.summary-links a { color: var(--accent); min-height: 24px; display: inline-flex; align-items: center; }
+.google-lists { display: grid; gap: 6px; }
+.google-lists .label { font-size: 13px; font-weight: 700; color: var(--muted); }
+.feature-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.feature { padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); font-size: 12px; font-weight: 600; }
+.btn svg { width: 16px; height: 16px; flex: none; }
 .stars { display: flex; gap: 4px; }
 .stars button { border: 0; background: none; font-size: 26px; line-height: 1; padding: 2px; color: var(--line); }
 .stars button.on { color: #e0a100; }
@@ -754,3 +963,20 @@ details.hours summary { cursor: pointer; color: var(--accent); font-size: 13px; 
   .sheet { animation: none; }
   .spinner { animation-duration: 2s; }
 }
+
+.swatches { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.swatch {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 10px 6px;
+  min-height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+.swatch .dot { width: 26px; height: 26px; border-radius: 50%; box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--line); }
+.swatch[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }

@@ -7,6 +7,14 @@
   <meta name="description" content="Restaurants you saved from Instagram, on a map, with the branch closest to home." />
   <meta name="theme-color" content="#f7f4f6" media="(prefers-color-scheme: light)" />
   <meta name="theme-color" content="#151114" media="(prefers-color-scheme: dark)" />
+  <script>
+    // The color theme picked in Settings, applied before the page draws so it doesn't flash.
+    try {
+      var t = JSON.parse(localStorage.getItem("reel-eats-theme") || "{}");
+      if (t.mode === "light" || t.mode === "dark") document.documentElement.dataset.theme = t.mode;
+      if (t.accent && t.accent !== "berry") document.documentElement.dataset.accent = t.accent;
+    } catch (e) {}
+  </script>
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-title" content="Reel Eats" />
@@ -70,6 +78,40 @@
             <option value="new">Newest</option>
             <option value="name">A to Z</option>
           </select>
+        </div>
+        <div class="icon-filters" id="icon-filters" role="group" aria-label="Filter the list">
+          <button type="button" class="icon-filter" data-filter="go-soon" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12M6 21h12"/><path d="M7 3v2a5 5 0 005 5 5 5 0 015 5v6M17 3v2a5 5 0 01-5 5 5 5 0 00-5 5v6"/></svg>
+            Go soon
+          </button>
+          <button type="button" class="icon-filter" data-filter="date night" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0112 7.1a4.3 4.3 0 017.5 2.7C19.5 15.4 12 20 12 20z"/></svg>
+            Date night
+          </button>
+          <button type="button" class="icon-filter" data-filter="coffee date" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h12v4a5 5 0 01-5 5H9a5 5 0 01-5-5z"/><path d="M16 11h1.5a2.5 2.5 0 010 5H16"/><path d="M8 3.5v3M12 3.5v3"/></svg>
+            Coffee
+          </button>
+          <button type="button" class="icon-filter" data-filter="cocktails" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16l-8 9z"/><path d="M12 13v7M8 20h8"/></svg>
+            Cocktails
+          </button>
+          <button type="button" class="icon-filter" data-filter="brunch" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18h18"/><path d="M7 18a5 5 0 0110 0"/><path d="M12 6v3M5.6 9.6l1.8 1.8M18.4 9.6l-1.8 1.8"/></svg>
+            Brunch
+          </button>
+          <button type="button" class="icon-filter" data-filter="outdoor seating" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11a9 6.5 0 0118 0z"/><path d="M12 11v10M8 21h8"/></svg>
+            Outdoor
+          </button>
+          <button type="button" class="icon-filter" data-filter="late night" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 019.5 4 7.5 7.5 0 1020 14.5z"/></svg>
+            Late night
+          </button>
+          <button type="button" class="icon-filter" data-filter="under-20" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>
+            Under $20
+          </button>
         </div>
         <div id="list"></div>
       </section>

@@ -229,6 +229,32 @@ r = await call(`/api/places/${lucali.id}`, { method: "PATCH", body: { my_rating:
 assert.equal(r.status, 400);
 step("marks visited with a rating and notes, and validates input");
 
+r = await call("/api/state");
+assert.equal(byGoogle(r.data.places, "tdn").price_range, "$10–20");
+assert.equal(byGoogle(r.data.places, "lucali").price_range, "$30–60");
+r = await call(`/api/places/${lucali.id}/google`);
+assert.equal(r.status, 200, JSON.stringify(r.data));
+assert.match(r.data.summary.text, /calzone/);
+assert.equal(r.data.summary.disclosure, "Summarized with Gemini");
+assert.match(r.data.summary.flagUri, /report/);
+assert.deepEqual(r.data.features, ["Outdoor seating", "Good for groups", "Takeout"]);
+assert.equal(r.data.menu_url, null, "Lucali's site has only a navigation button called Menu");
+assert.equal(r.data.menu_checked_for, `${MOCK}/site/lucali`);
+r = await call(`/api/places/${tdn.id}/google`);
+assert.equal(r.data.summary, null);
+assert.deepEqual(r.data.features, ["Takeout"]);
+assert.equal(r.data.menu_url, `${MOCK}/site/tdn/menu`);
+r = await call(`/api/places/${tdn.id}/google`);
+r = await call(`/api/places/${tdn.id}/google`);
+assert.equal(r.data.limited, true, "the fourth review summary of the day waits for tomorrow");
+assert.equal(r.data.menu_url, `${MOCK}/site/tdn/menu`, "the menu link is kept");
+let upstream = await fetch(`${MOCK}/__calls`).then((x) => x.json());
+assert.equal(upstream["site tdn"], 1, "the restaurant's site is read once, not on every open");
+assert.equal(upstream["google extras tdn"], 2);
+r = await call("/api/state");
+assert.equal(byGoogle(r.data.places, "tdn").menu_url, `${MOCK}/site/tdn/menu`);
+step("opens a place with Google's review summary and features, the price range, and a menu link from the restaurant's site");
+
 const shack = byGoogle(places, "ss_hs");
 r = await call(`/api/places/${shack.id}`, { method: "PATCH", body: { branch_id: "ss_msp" } });
 assert.equal(r.data.place.google_place_id, "ss_msp");

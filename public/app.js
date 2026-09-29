@@ -59,6 +59,17 @@ const ARCHIVE_REASONS = { "not-for-me": "Not for me", closed: "Closed", "too-far
 const TOKEN_KEY = "reel-eats-token";
 const PREFS_KEY = "reel-eats-prefs";
 const BANNER_KEY = "reel-eats-banner";
+const THEME_KEY = "reel-eats-theme";
+
+/** Color themes. The colors themselves are in styles.css; these are for the swatches and the phone's status bar. */
+const THEMES = [
+  { id: "berry", name: "Berry", accent: "#b3306b", darkAccent: "#e56a9f", bg: "#f7f4f6", darkBg: "#151114" },
+  { id: "ocean", name: "Ocean", accent: "#1f63ad", darkAccent: "#6aa9ec", bg: "#f3f6f9", darkBg: "#0f1419" },
+  { id: "teal", name: "Teal", accent: "#0b6b65", darkAccent: "#4cc2b8", bg: "#f2f7f6", darkBg: "#0e1514" },
+  { id: "grape", name: "Grape", accent: "#6a3fc0", darkAccent: "#a888f2", bg: "#f6f4f9", darkBg: "#13111a" },
+  { id: "espresso", name: "Espresso", accent: "#8b5130", darkAccent: "#d99a6c", bg: "#f8f5f1", darkBg: "#15110e" },
+  { id: "slate", name: "Slate", accent: "#3d4f66", darkAccent: "#9db4d0", bg: "#f4f5f7", darkBg: "#111317" },
+];
 const SCOPE_LABEL = { want: "To try", visited: "Visited", all: "All places" };
 
 const state = {
@@ -79,6 +90,8 @@ const state = {
   tag: "",
   goSoon: false,
   openNow: false,
+  /** The filter icons on the list page. Every one that's on has to match. */
+  filters: [],
   search: "",
   sort: "home",
   me: null,
@@ -123,6 +136,35 @@ const store = {
   },
 };
 const isOwner = () => !state.guest && state.viewer.role === "owner";
+
+function themePrefs() {
+  try {
+    const t = JSON.parse(store.get(THEME_KEY) || "{}");
+    return { mode: ["light", "dark"].includes(t.mode) ? t.mode : "auto", accent: THEMES.some((x) => x.id === t.accent) ? t.accent : "berry" };
+  } catch {
+    return { mode: "auto", accent: "berry" };
+  }
+}
+
+/** Light, dark or the phone's setting, plus a color. Kept on this device only. */
+function applyTheme(prefs = themePrefs()) {
+  const root = document.documentElement;
+  if (prefs.mode === "auto") delete root.dataset.theme;
+  else root.dataset.theme = prefs.mode;
+  if (prefs.accent === "berry") delete root.dataset.accent;
+  else root.dataset.accent = prefs.accent;
+  const t = THEMES.find((x) => x.id === prefs.accent) || THEMES[0];
+  const light = document.querySelector('meta[name="theme-color"][media*="light"]');
+  const dark = document.querySelector('meta[name="theme-color"][media*="dark"]');
+  if (light) light.content = prefs.mode === "dark" ? t.darkBg : t.bg;
+  if (dark) dark.content = prefs.mode === "light" ? t.bg : t.darkBg;
+}
+
+function setTheme(change) {
+  const prefs = { ...themePrefs(), ...change };
+  store.set(THEME_KEY, JSON.stringify(prefs));
+  applyTheme(prefs);
+}
 
 function fmtDist(m) {
   if (m == null || Number.isNaN(m)) return "";
@@ -480,6 +522,30 @@ function matchesSearch(p, q) {
     .every((w) => hay.includes(w));
 }
 
+/** The top of Google's price range: 20 for "$10–20", null for "$100+" or none. */
+function priceTop(p) {
+  const m = (p.price_range || "").match(/(\d+)\D*$/);
+  return m && !/\+$/.test(p.price_range) ? Number(m[1]) : null;
+}
+
+const LIST_FILTERS = {
+  "go-soon": { label: "go soon", test: goSoonActive },
+  "date night": { label: "date night" },
+  "coffee date": { label: "coffee" },
+  cocktails: { label: "cocktails" },
+  brunch: { label: "brunch" },
+  "outdoor seating": { label: "outdoor" },
+  "late night": { label: "late night" },
+  "under-20": { label: "under $20", test: (p) => (priceTop(p) ?? Infinity) <= 20 },
+};
+
+/** A filter icon is a tag unless it says otherwise. */
+const matchesFilters = (p) => state.filters.every((f) => (LIST_FILTERS[f]?.test ? LIST_FILTERS[f].test(p) : (p.tags || []).includes(f)));
+
+function renderIconFilters() {
+  for (const b of document.querySelectorAll("[data-filter]")) b.setAttribute("aria-pressed", String(state.filters.includes(b.dataset.filter)));
+}
+
 function distanceFor(p) {
   if (state.sort === "me" && state.me && p.lat != null) return haversine(state.me.lat, state.me.lng, p.lat, p.lng);
   return p.distance_m;
@@ -524,9 +590,10 @@ function placeCard(p) {
   if (creators > 1) extras.push(`<span class="pill accent">${creators} creators</span>`);
   const who = addedByLabel(p);
   if (who) extras.push(`<span class="pill">Added by ${esc(who)}</span>`);
+  const price = p.price_range ? `${sub ? " · " : ""}<span class="price">${esc(p.price_range)}</span>` : "";
   return `<button type="button" class="place-card${visited ? " visited" : ""}${closedForGood(p) || isArchived(p) ? " gone" : ""}" data-open="${esc(p.id)}">
     ${thumb(p)}
-    <div class="main"><div class="title">${esc(p.name)}</div><div class="sub">${esc(sub)}</div>${extras.length ? `<div class="extras">${extras.join("")}</div>` : ""}</div>
+    <div class="main"><div class="title">${esc(p.name)}</div><div class="sub">${esc(sub)}${price}</div>${extras.length ? `<div class="extras">${extras.join("")}</div>` : ""}</div>
     <div class="meta">${d ? `<div class="distance">${esc(d)}</div>` : ""}${pills.join("")}</div>
   </button>`;
 }
@@ -579,6 +646,8 @@ function renderArchived(el, q) {
 function renderList() {
   const el = $("#list");
   const q = state.search.trim();
+  const icons = $("#icon-filters");
+  if (icons) icons.hidden = (state.archivedView && !state.guest) || !state.places.length;
   if (state.archivedView && !state.guest) return renderArchived(el, q);
   let html = activeFilters();
   if (state.shares.length) {
@@ -593,14 +662,18 @@ function renderList() {
   if (!state.places.length) {
     html += emptyState();
   } else {
-    const items = sortPlaces(visiblePlaces().filter((p) => matchesSearch(p, q)));
+    const items = sortPlaces(visiblePlaces().filter((p) => matchesSearch(p, q) && matchesFilters(p)));
     const label = SCOPE_LABEL[state.status];
     const cat = state.category ? ` · ${state.category}` : "";
     const open = state.openNow ? " · open now" : "";
-    html += `<div class="section-label">${esc(label + cat + open)} · <span class="num">${items.length}</span></div>`;
+    const picked = state.filters.map((f) => ` · ${LIST_FILTERS[f]?.label ?? f}`).join("");
+    const clear = state.filters.length ? `<button type="button" class="link-btn" data-clear-filters>Clear</button>` : "";
+    html += `<div class="section-row"><div class="section-label">${esc(label + cat + open + picked)} · <span class="num">${items.length}</span></div>${clear}</div>`;
     html += items.length
       ? `<div class="cards">${items.map(placeCard).join("")}</div>`
-      : `<div class="empty"><h2>No matches</h2><p>${state.openNow ? "Nothing that matches is open right now. Turn off Open now, or" : "Try another search, or"} switch between To try, Visited and All.</p></div>`;
+      : state.filters.length
+        ? `<div class="empty"><h2>No matches</h2><p>Nothing here has all of those. Turn one off, or tap Clear.</p></div>`
+        : `<div class="empty"><h2>No matches</h2><p>${state.openNow ? "Nothing that matches is open right now. Turn off Open now, or" : "Try another search, or"} switch between To try, Visited and All.</p></div>`;
   }
   const archived = state.places.filter(isArchived);
   if (archived.length && !state.guest) {
@@ -609,6 +682,7 @@ function renderList() {
       <span>Archived</span><span class="hint num">${q ? `${hits} ${hits === 1 ? "match" : "matches"}` : archived.length}</span></button>`;
   }
   el.innerHTML = html;
+  renderIconFilters();
 }
 
 function emptyState() {
@@ -672,6 +746,20 @@ function renderBrowse() {
 }
 
 /* ---------- settings ---------- */
+function appearancePanel() {
+  const t = themePrefs();
+  const dark = t.mode === "dark" || (t.mode === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
+  const mode = (m, label) => `<button type="button" data-theme-mode="${m}" aria-pressed="${t.mode === m}">${label}</button>`;
+  return `<section class="panel">
+      <h2>Appearance</h2>
+      <p class="hint">Saved on this phone only.</p>
+      <div class="segmented" role="group" aria-label="Light or dark">${mode("auto", "Match phone")}${mode("light", "Light")}${mode("dark", "Dark")}</div>
+      <div class="swatches" role="group" aria-label="Color">${THEMES.map(
+        (x) => `<button type="button" class="swatch" data-theme-accent="${x.id}" aria-pressed="${t.accent === x.id}"><span class="dot" style="background:${dark ? x.darkAccent : x.accent}"></span>${esc(x.name)}</button>`,
+      ).join("")}</div>
+    </section>`;
+}
+
 function renderSettings() {
   const origin = location.origin;
   const a = state.apify;
@@ -695,6 +783,8 @@ function renderSettings() {
         <button type="button" data-units="km" aria-pressed="${state.units === "km"}">Kilometers</button>
       </div>
     </section>
+
+    ${appearancePanel()}
 
     <section class="panel">
       <h2>Share from Instagram</h2>
@@ -985,6 +1075,7 @@ const ICON = {
   clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
   person: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>',
   play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>',
+  menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>',
 };
 
 /** Where to book. A booking-site website or a booking link in the caption wins; otherwise search. */
@@ -1047,7 +1138,7 @@ function openPlace(id, { keepScroll = false } = {}) {
   const guest = !!state.guest;
 
   const visited = p.visit_status === "visited";
-  const maps = safeUrl(p.maps_url) || `https://www.google.com/maps/search/?api=1&query=${enc([p.name, p.address || p.city_hint].filter(Boolean).join(" "))}`;
+  const maps = mapsLink(p);
   const apple = p.located
     ? `https://maps.apple.com/?q=${enc(p.name)}&ll=${p.lat},${p.lng}`
     : `https://maps.apple.com/?q=${enc([p.name, p.city_hint].filter(Boolean).join(" "))}`;
@@ -1068,7 +1159,9 @@ function openPlace(id, { keepScroll = false } = {}) {
   if (!closedForGood(p)) facts.push(hoursFact(p));
   if (p.rating) {
     facts.push(
-      `<div class="fact">${ICON.star}<div>${p.rating.toFixed(1)} on Google <span class="muted num">(${(p.rating_count || 0).toLocaleString()} reviews)</span>${p.price_level ? ` · ${esc(p.price_level)}` : ""}</div></div>`,
+      `<div class="fact">${ICON.star}<div>${p.rating.toFixed(1)} on Google <span class="muted num">(${(p.rating_count || 0).toLocaleString()} reviews)</span>${p.price_level ? ` · ${esc(p.price_level)}` : ""}${
+        p.price_range ? ` · <strong class="num">${esc(p.price_range)} per person</strong>` : ""
+      }</div></div>`,
     );
   }
   if (p.phone) facts.push(`<div class="fact">${ICON.phone}<div><a href="tel:${esc(p.phone.replace(/[^\d+]/g, ""))}">${esc(p.phone)}</a></div></div>`);
@@ -1177,6 +1270,7 @@ function openPlace(id, { keepScroll = false } = {}) {
       <a class="btn" href="${esc(apple)}" target="_blank" rel="noopener">Apple Maps</a>
       ${ig ? `<a class="btn" href="${esc(ig)}" target="_blank" rel="noopener">@${esc(p.instagram_handle)}</a>` : ""}
       ${site ? `<a class="btn" href="${esc(site)}" target="_blank" rel="noopener">Website</a>` : ""}
+      ${menuButton(p)}
       ${p.located && !isArchived(p) ? `<button class="btn" type="button" data-act="show-on-map">Show on map</button>` : ""}
     </div>
 
@@ -1188,7 +1282,9 @@ function openPlace(id, { keepScroll = false } = {}) {
     ${tagPills.length ? `<div class="tag-row">${tagPills.join("")}</div>` : ""}
     ${p.summary ? `<p class="summary">${esc(p.summary)}</p>` : ""}
     ${p.dishes?.length ? `<div class="dishes">${p.dishes.map((d) => `<span class="dish">${esc(d)}</span>`).join("")}</div>` : ""}
+    <section class="review-summary" id="review-summary" aria-labelledby="review-summary-title" hidden></section>
     ${facts.filter(Boolean).length ? `<div class="facts">${facts.join("")}</div>` : ""}
+    <div class="google-lists" id="google-lists" hidden></div>
     ${bookRow}
 
     ${mine}
@@ -1201,6 +1297,66 @@ function openPlace(id, { keepScroll = false } = {}) {
   </div>`;
   openSheet(html, { type: "place", id });
   if (prevScroll) $("#sheet .sheet-body").scrollTop = prevScroll;
+  if (p.located && !guest) loadGoogleExtras(id);
+}
+
+/* ---------- Google's review summary, features and menu link ---------- */
+/** Fetched when a place is opened, once per visit to the app. Google's terms don't allow storing them. */
+const googleExtras = new Map();
+
+function mapsLink(p) {
+  return safeUrl(p.maps_url) || `https://www.google.com/maps/search/?api=1&query=${enc([p.name, p.address || p.city_hint].filter(Boolean).join(" "))}`;
+}
+
+function menuButton(p) {
+  const menu = p.menu_url && (state.guest || p.menu_checked_for === p.website) ? safeUrl(p.menu_url) : "";
+  if (menu) return `<a class="btn" id="menu-btn" href="${esc(menu)}" target="_blank" rel="noopener">${ICON.menu}Menu</a>`;
+  // Google's API doesn't hand out the menu photos people post, but the Maps app shows them.
+  if (p.located) return `<a class="btn" id="menu-btn" href="${esc(mapsLink(p))}" target="_blank" rel="noopener">${ICON.menu}Menu on Google Maps</a>`;
+  return "";
+}
+
+async function loadGoogleExtras(id) {
+  let data = googleExtras.get(id);
+  if (!data) {
+    try {
+      data = await api(`/api/places/${id}/google`);
+    } catch {
+      return;
+    }
+    googleExtras.set(id, data);
+  }
+  const p = state.places.find((x) => x.id === id);
+  if (!p) return;
+  if ("menu_url" in data) {
+    p.menu_url = data.menu_url;
+    p.menu_checked_for = data.menu_checked_for;
+  }
+  if (state.sheet?.type === "place" && state.sheet.id === id) showGoogleExtras(p, data);
+}
+
+function showGoogleExtras(p, data) {
+  const btn = $("#menu-btn");
+  if (btn) btn.outerHTML = menuButton(p);
+  const box = $("#review-summary");
+  const s = data.summary;
+  if (box && s?.text) {
+    const links = [
+      safeUrl(s.reviewsUri) ? `<a href="${esc(safeUrl(s.reviewsUri))}" target="_blank" rel="noopener">See reviews</a>` : "",
+      `<a href="https://support.google.com/local-listings/answer/9851099" target="_blank" rel="noopener">About this summary</a>`,
+      safeUrl(s.flagUri) ? `<a href="${esc(safeUrl(s.flagUri))}" target="_blank" rel="noopener">Report summary</a>` : "",
+    ].filter(Boolean);
+    box.innerHTML = `<h3 id="review-summary-title">Review summary</h3>
+      <p>${esc(s.text)}</p>
+      <div class="disclosure">${esc(s.disclosure)}</div>
+      <div class="summary-links">${links.join("")}</div>`;
+    box.hidden = false;
+  }
+  const list = $("#google-lists");
+  if (list && data.features?.length) {
+    list.innerHTML = `<div class="label">Google lists</div><div class="feature-row">${data.features.map((f) => `<span class="feature">${esc(f)}</span>`).join("")}</div>`;
+    list.hidden = false;
+  }
 }
 
 /* ---------- debugging details ---------- */
@@ -1485,7 +1641,7 @@ function bindUI() {
   // Delegated clicks for content that gets re-rendered.
   document.addEventListener("click", async (e) => {
     const t = e.target.closest(
-      "[data-open],[data-go],[data-cat],[data-city],[data-tag],[data-go-soon],[data-clear],[data-dismiss],[data-units],[data-copy],[data-copy-token],[data-export],[data-banner-close],[data-revoke-member],[data-revoke-link],[data-share-url],[data-debug-share],[data-copy-debug],[data-archived-view],[data-archive-closed],#recheck-btn,#refresh-btn,#signout-btn,#paste-btn,[data-act]",
+      "[data-open],[data-go],[data-filter],[data-clear-filters],[data-theme-mode],[data-theme-accent],[data-cat],[data-city],[data-tag],[data-go-soon],[data-clear],[data-dismiss],[data-units],[data-copy],[data-copy-token],[data-export],[data-banner-close],[data-revoke-member],[data-revoke-link],[data-share-url],[data-debug-share],[data-copy-debug],[data-archived-view],[data-archive-closed],#recheck-btn,#refresh-btn,#signout-btn,#paste-btn,[data-act]",
     );
     if (!t) return;
     if (t.dataset.open) return openPlace(t.dataset.open);
@@ -1515,6 +1671,19 @@ function bindUI() {
       state.tag = "";
       state.city = "";
       return setView("list");
+    }
+    if (t.dataset.themeMode || t.dataset.themeAccent) {
+      setTheme(t.dataset.themeMode ? { mode: t.dataset.themeMode } : { accent: t.dataset.themeAccent });
+      return renderSettings();
+    }
+    if (t.dataset.filter) {
+      const f = t.dataset.filter;
+      state.filters = state.filters.includes(f) ? state.filters.filter((x) => x !== f) : [...state.filters, f];
+      return renderList();
+    }
+    if (t.dataset.clearFilters !== undefined) {
+      state.filters = [];
+      return renderList();
     }
     if (t.dataset.clear) {
       state[t.dataset.clear] = t.dataset.clear === "goSoon" ? false : "";
@@ -1863,4 +2032,5 @@ async function boot() {
   if (shared) submitShare(shared);
 }
 
+applyTheme();
 boot();
