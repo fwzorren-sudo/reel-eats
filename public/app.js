@@ -226,7 +226,7 @@ async function api(path, { method = "GET", body } = {}) {
     throw new Unauthorized("unauthorized");
   }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || data.message || `Request failed (${res.status}).`);
+  if (!res.ok) throw Object.assign(new Error(data.error || data.message || `Request failed (${res.status}).`), { status: res.status });
   return data;
 }
 
@@ -2245,8 +2245,11 @@ async function submitShare(payload) {
   let r;
   try {
     r = await api("/api/share?wait=1", { method: "POST", body: payload });
+    if (fromShareMenu.has(payload)) rememberShared(payload);
   } catch (e) {
     if (e instanceof Unauthorized) return;
+    // The server turned it down, so sending it again won't help. A lost connection is tried again.
+    if (fromShareMenu.has(payload) && e.status >= 400 && e.status < 500) rememberShared(payload);
     if (state.sheet?.type === "working") resultSheet("Couldn't save", `<p>${esc(e.message)}</p>`, { type: "result" });
     else toast(e.message);
     return;
@@ -2296,12 +2299,38 @@ async function retryShare(id, note) {
 }
 
 /* ---------- share target (Android) ---------- */
+const SHARED_KEY = "reel-eats-shared";
+/** Shares from the share menu, remembered once the server has them. */
+const fromShareMenu = new WeakSet();
+const shareKey = (d) => [d.url, d.text, d.title].join("\n").slice(0, 600);
+
+function sharesSent() {
+  try {
+    const list = JSON.parse(store.get(SHARED_KEY) || "[]");
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberShared(d) {
+  const key = shareKey(d);
+  store.set(SHARED_KEY, JSON.stringify([key, ...sharesSent().filter((k) => k !== key)].slice(0, 40)));
+}
+
+/**
+ * Android hands the app the same share again when it's reopened from recent apps, so a share
+ * that already reached the server is skipped. Sharing the reel again from Instagram still works:
+ * each share from there carries a new tracking code in the link.
+ */
 function readShareParams() {
   if (location.pathname !== "/share") return null;
   const q = new URLSearchParams(location.search);
   const data = { url: q.get("url") || "", text: q.get("text") || "", title: q.get("title") || "" };
   history.replaceState(null, "", "/");
-  return data.url || data.text || data.title ? data : null;
+  if (!(data.url || data.text || data.title) || sharesSent().includes(shareKey(data))) return null;
+  fromShareMenu.add(data);
+  return data;
 }
 
 /* ---------- login ---------- */
